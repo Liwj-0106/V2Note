@@ -1,8 +1,8 @@
-# VtNote
+# V2Note
 
 > 把视频里的知识变成可检索、可复用的文档。
 
-VtNote 是一个通过浏览器使用的音视频整理工具。粘贴 B 站、YouTube、抖音等视频链接，或导入本地视频、音频和字幕，VtNote 会把内容转写、总结并整理成带章节和时间戳的文档，方便复核、搜索、归档和导出。
+V2Note 是一个通过浏览器使用的音视频整理工具。粘贴 B 站、YouTube、抖音等视频链接，或导入本地视频、音频和字幕，V2Note 会把内容转写、总结并整理成带章节和时间戳的文档，方便复核、搜索、归档和导出。
 
 ## 主要能力
 
@@ -41,14 +41,15 @@ Python、FFmpeg、CUDA 和 Python 包版本由 `environment.yml` 声明，前端
 ```powershell
 conda env create -f environment.yml
 conda activate vtnote
+python -m pip install -e ".[dev]"
 npm --prefix frontend ci
 npm --prefix frontend run build
-python -m vtnote
+vtnote
 ```
 
 然后打开 <http://127.0.0.1:8766>。首次使用时，在页面中配置语音识别和 AI 模型；只做本地转写时，可以不配置总结模型。
 
-默认服务只监听 `127.0.0.1`。内容库、缓存、模型文件和导出结果保存在项目的 `.vtnote/`、`exports/` 等目录中，这些运行数据已被 Git 忽略。
+默认服务只监听 `127.0.0.1`。本机模式的内容库、缓存、模型文件和导出结果保存在用户数据目录及 `exports/` 等位置，这些运行数据已被 Git 忽略。
 
 ## 输入与输出
 
@@ -71,12 +72,16 @@ python -m vtnote
 ```text
 React / TypeScript 前端
           │ HTTP
-FastAPI API ─── SQLite 持久队列 ─── 独立 Worker
-          │                         │
-          └──── 文件产物与状态 ──────┘
-                       │
-          FFmpeg · 平台解析 · ASR · 总结模型
+FastAPI API ── MySQL 阶段状态 ── Kafka ── 独立 Worker
+       │             │                         │
+       └────── Redis 来源幂等 ──────────────────┤
+                                                 ├─ FFmpeg / 平台解析 / ASR
+                                                 └─ LangGraph 章节总结
 ```
+
+服务端运行使用 MySQL、Kafka 与 Redis；本地桌面运行仍使用 SQLite 和独立 Worker。视频任务由 Worker 消费 Kafka 阶段消息，MySQL 保存阶段状态与恢复进度；重复来源通过 Redis 快速命中，并由 MySQL 映射保障结果复用。章节总结使用 LangGraph 推进分块游标，处理中断后从已保存的游标继续。
+
+启动服务端依赖：复制 `.env.example` 为 `.env` 并设置独立随机密码，再启动 `docker compose -f docker-compose.server.yml up -d`。该 Compose 只提供本机开发依赖，所有端口都绑定回环地址；运行 V2Note 的当前 PowerShell 会话还需设置 `VTNOTE_DATABASE_URL`、`VTNOTE_KAFKA_BOOTSTRAP_SERVERS` 和 `VTNOTE_REDIS_URL`，然后用常规启动命令启动应用。数据库密码放入 URL 时需进行 URL 编码。
 
 - `src/vtnote/`：启动器、API、Worker、任务流水线和资源解析。
 - `src/vtnote/http/`：HTTP 路由、请求参数和响应结构。
@@ -92,7 +97,7 @@ FastAPI API ─── SQLite 持久队列 ─── 独立 Worker
 
 ## 模型配置
 
-VtNote 不把模型文件提交到仓库。用户可以在设置中选择云端服务，或按需安装本地 ASR 资产；当前代码包含 SenseVoice Small INT8（sherpa-onnx + Silero VAD）和 Faster-Whisper 的适配入口。模型清单位于 `assets/models/`，实际模型文件保存在被忽略的运行目录中。
+V2Note 不把模型文件提交到仓库。用户可以在设置中选择云端服务，或按需安装本地 ASR 资产；当前代码包含 SenseVoice Small INT8（sherpa-onnx + Silero VAD）和 Faster-Whisper 的适配入口。模型清单位于 `assets/models/`，实际模型文件保存在被忽略的运行目录中。
 
 ## 测试与打包
 

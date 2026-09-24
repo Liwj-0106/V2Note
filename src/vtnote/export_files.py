@@ -294,7 +294,7 @@ class ExportFileService:
         if mode not in {"zip_all", "zip_notes"}:
             raise InvalidTaskOperation("invalid batch export mode")
 
-        destination = self._unique_path(directory, "VtNote-summary-export", "zip")
+        destination = self._unique_path(directory, "V2Note-summary-export", "zip")
         archive_names: set[str] = set()
 
         def archive_name(title: str, suffix: str, extension: str) -> str:

@@ -5,8 +5,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { ApiError, api, isTerminalStatus, retryPollDelay } from "../api/client";
-import type { LibrarySearchResult, Task, TaskItem } from "../api/types";
+import { ApiError, api } from "../api/client";
+import type { Task, TaskItem } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { MotionPresence } from "../components/MotionPresence";
@@ -23,11 +23,11 @@ import {
 } from "../features/task-library/LibraryToolbar";
 import { NewSummaryDialog } from "../features/task-library/NewSummaryDialog";
 import { TaskLibraryWorkspace } from "../features/task-library/TaskLibraryWorkspace";
+import { useTaskHistoryRecords } from "../features/task-library/useTaskHistoryRecords";
 import { useTaskLibrarySelection } from "../features/task-library/useTaskLibrarySelection";
 import { useTaskQueue } from "../features/task-queue/TaskQueueProvider";
 import {
   deleteErrorMessage,
-  mergeNewestTasks,
   taskRetryPlan,
   taskTitle,
   type TaskRetryPlan,
@@ -43,26 +43,6 @@ const defaultProperties = new Set<LibraryProperty>([
   "publishedAt",
 ]);
 
-async function requestAllTaskPages(signal?: AbortSignal): Promise<Task[]> {
-  const tasks: Task[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | null = null;
-  do {
-    const query = new URLSearchParams({ limit: "100" });
-    if (cursor) query.set("cursor", cursor);
-    const page = await api.requestPage<Task[]>(
-      `/api/tasks?${query.toString()}`,
-      signal,
-    );
-    tasks.push(...page.data);
-    if (page.nextCursor === null) break;
-    if (seenCursors.has(page.nextCursor)) throw new Error("task cursor repeated");
-    seenCursors.add(page.nextCursor);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return tasks;
-}
-
 export function TaskHistoryPage() {
   const { path } = useRouter();
   const { registerTasks } = useTaskQueue();
@@ -73,12 +53,8 @@ export function TaskHistoryPage() {
       unclassified: query.get("unclassified") === "true",
     };
   }, [path]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [searchResults, setSearchResults] = useState<LibrarySearchResult[]>([]);
   const [organizing, setOrganizing] = useState(false);
   const [newSummaryOpen, setNewSummaryOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [selectedExportTask, setSelectedExportTask] = useState<Task | null>(null);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [deleteTargets, setDeleteTargets] = useState<Task[]>([]);
@@ -96,7 +72,6 @@ export function TaskHistoryPage() {
   const [pageSize, setPageSize] = useState(30);
   const [page, setPage] = useState(0);
   const libraryListRef = useRef<HTMLDivElement>(null);
-  const deletedTaskIdsRef = useRef<Set<string>>(new Set());
   const {
     filters,
     setFilters,
@@ -106,6 +81,17 @@ export function TaskHistoryPage() {
     searchActive,
     discoveryQuery,
   } = useLibraryDiscovery(initialLibraryFilters);
+  const {
+    tasks,
+    setTasks,
+    searchResults,
+    setSearchResults,
+    loading,
+    error,
+    setError,
+    load,
+    markTasksDeleted,
+  } = useTaskHistoryRecords({ searchActive, discoveryQuery });
 
   useEffect(() => {
     setFilters((current) => {
@@ -124,86 +110,6 @@ export function TaskHistoryPage() {
   const scopeLabel = filters.unclassified
     ? "未分类"
     : metadata.collections.find((collection) => collection.id === filters.collectionId)?.name;
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    if (searchActive) {
-      try {
-        const results = await api.request<LibrarySearchResult[]>(
-          `/api/library/search?${discoveryQuery}`,
-        );
-        setSearchResults(results);
-        setTasks(results.map((result) => result.task));
-      } catch (caught) {
-        setError(caught instanceof ApiError ? caught.message : "无法搜索总结记录。");
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-    try {
-      const result = await requestAllTaskPages();
-      const visible = result.filter(
-        (task) => !deletedTaskIdsRef.current.has(task.id),
-      );
-      setTasks(visible);
-      setSearchResults([]);
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "无法读取总结记录。");
-    } finally {
-      setLoading(false);
-    }
-  }, [discoveryQuery, searchActive]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const hasActiveTasks = useMemo(
-    () => tasks.some((task) => !isTerminalStatus(task.status)),
-    [tasks],
-  );
-
-  useEffect(() => {
-    if (!hasActiveTasks || searchActive) return;
-    let disposed = false;
-    let failureCount = 0;
-    let timer: number | null = null;
-    let controller: AbortController | null = null;
-
-    const schedule = (delay: number) => {
-      timer = window.setTimeout(() => void refresh(), delay);
-    };
-    const refresh = async () => {
-      controller = new AbortController();
-      try {
-        const result = await requestAllTaskPages(controller.signal);
-        if (disposed) return;
-        failureCount = 0;
-        setTasks((current) =>
-          mergeNewestTasks(
-            current,
-            result.filter((task) => !deletedTaskIdsRef.current.has(task.id)),
-          ),
-        );
-        schedule(document.hidden ? 10_000 : 1_500);
-      } catch (caught) {
-        if (disposed || (caught instanceof DOMException && caught.name === "AbortError")) {
-          return;
-        }
-        failureCount += 1;
-        schedule(retryPollDelay(failureCount));
-      }
-    };
-
-    schedule(document.hidden ? 5_000 : 900);
-    return () => {
-      disposed = true;
-      controller?.abort();
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [hasActiveTasks, searchActive]);
 
   const pageCount = Math.max(1, Math.ceil(tasks.length / pageSize));
   const visibleTasks = useMemo(
@@ -248,7 +154,7 @@ export function TaskHistoryPage() {
         (result): result is PromiseRejectedResult => result.status === "rejected",
       );
 
-      for (const taskId of deletedTaskIds) deletedTaskIdsRef.current.add(taskId);
+      markTasksDeleted(deletedTaskIds);
       setRemovingTaskIds((current) => new Set([...current, ...deletedTaskIds]));
       setSelectedTaskIds((current) => {
         const next = new Set(current);
@@ -316,7 +222,7 @@ export function TaskHistoryPage() {
       next.delete(taskId);
       return next;
     });
-  }, []);
+  }, [setTasks]);
 
   const selectedTasks = tasks.filter((task) => selectedTaskIds.has(task.id));
   const selectedVisibleRows = visibleTasks.filter((task) =>

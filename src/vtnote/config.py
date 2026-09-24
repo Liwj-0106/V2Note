@@ -82,6 +82,72 @@ class Settings(BaseSettings):
     bind_host: Literal["127.0.0.1"] = "127.0.0.1"
     bind_port: int = Field(default=8766, ge=1, le=65_535)
     enable_dev_docs: bool = False
+    database_url: str | None = Field(default=None, repr=False)
+    kafka_bootstrap_servers: str | None = None
+    kafka_stage_topic: str = "v2note.stage-runs"
+    kafka_consumer_group: str = "v2note-workers"
+    redis_url: str | None = Field(default=None, repr=False)
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from sqlalchemy.engine import make_url
+
+        try:
+            url = make_url(value)
+        except (TypeError, ValueError):
+            raise ValueError("database URL is invalid") from None
+        if url.drivername not in {"sqlite+pysqlite", "mysql+pymysql"}:
+            raise ValueError("database URL must use SQLite or MySQL with PyMySQL")
+        if url.drivername == "mysql+pymysql" and not url.database:
+            raise ValueError("MySQL database name is required")
+        return value
+
+    @field_validator("redis_url")
+    @classmethod
+    def validate_redis_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(value)
+            port = parts.port
+        except (TypeError, ValueError):
+            raise ValueError("Redis URL is invalid") from None
+        if (
+            parts.scheme not in {"redis", "rediss"}
+            or not parts.hostname
+            or (port is not None and not 1 <= port <= 65_535)
+        ):
+            raise ValueError("Redis URL is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def validate_distributed_runtime(self) -> Self:
+        distributed = any(
+            (
+                self.database_url is not None,
+                self.kafka_bootstrap_servers is not None,
+                self.redis_url is not None,
+            )
+        )
+        if distributed and not all(
+            (
+                self.database_url is not None
+                and self.database_url.startswith("mysql+pymysql://"),
+                self.kafka_bootstrap_servers,
+                self.redis_url,
+            )
+        ):
+            raise ValueError(
+                "server mode requires MySQL, Kafka and Redis together"
+            )
+        if not self.kafka_stage_topic or not self.kafka_consumer_group:
+            raise ValueError("Kafka topic and consumer group are required")
+        return self
 
     @field_validator("data_root", "runtime_cache_root")
     @classmethod

@@ -58,7 +58,7 @@ function RoutedApp() {
       <div className="page">
         <EmptyState
           title="页面不存在"
-          description="这个地址不属于 VtNote 的本地工作区。"
+          description="这个地址不属于 V2Note 的本地工作区。"
           actionLabel="返回新建任务"
         />
       </div>

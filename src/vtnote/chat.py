@@ -23,7 +23,7 @@ BAILIAN_CHAT_PATH = "/chat/completions"
 MAX_CHAT_REQUEST_BYTES = 64 * 1024
 MAX_CHAT_RESPONSE_BYTES = 256 * 1024
 _WORKSPACE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_MODEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:/-]{0,191})$")
+_MODEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:/-]{0,127})$")
 _SAFE_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _TOP_LEVEL_FIELDS = frozenset(
     {

@@ -207,7 +207,7 @@ def test_export_directory_and_collision_safe_transcript_save(tmp_path: Path) -> 
         destination = tmp_path / "exports"
         destination.mkdir()
         settings = ExportDirectoryService(session)
-        assert settings.get()["default_directory"].endswith("VtNote\\exports")
+        assert settings.get()["default_directory"].endswith("V2Note\\exports")
         view = settings.update(str(destination))
         assert view["directory"] == str(destination.resolve())
         service = ExportFileService(

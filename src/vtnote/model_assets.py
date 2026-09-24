@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from vtnote.models import ModelInstallRecord
 from vtnote.paths import StoragePaths
+from vtnote.persistence import begin_write_transaction
 from vtnote.platform_transport import PinnedHttpsTransport, SourceHttpRequest
 from vtnote.url_security import UpstreamHostPolicy
 
@@ -623,7 +624,7 @@ class ModelAssetService:
         if not worker_id or lease_duration <= timedelta(0):
             raise ValueError("invalid model install lease")
         with Session(self.engine) as session:
-            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            begin_write_transaction(session.connection())
             row = session.get(ModelInstallRecord, self.manifest.model_name)
             if (
                 row is None

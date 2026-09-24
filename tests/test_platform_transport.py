@@ -149,7 +149,7 @@ def test_direct_request_uses_vetted_addresses_host_sni_inputs_and_no_environment
     response = transport(resolver, connector).request(
         request(
             headers={
-                "User-Agent": "VtNote-test",
+                "User-Agent": "V2Note-test",
                 "Cookie": "session=secret",
                 "Authorization": "Bearer secret",
                 "Proxy-Authorization": "Basic secret",
@@ -170,7 +170,7 @@ def test_direct_request_uses_vetted_addresses_host_sni_inputs_and_no_environment
     assert call.headers == {
         "Accept-Encoding": "identity",
         "Host": "www.youtube.com",
-        "User-Agent": "VtNote-test",
+        "User-Agent": "V2Note-test",
     }
     assert "127.0.0.1" not in repr(call)
 

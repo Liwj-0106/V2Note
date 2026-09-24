@@ -6,10 +6,11 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from langgraph.graph import END, START, StateGraph
 
 from vtnote.artifacts import write_note_markdown
 from vtnote.chat import (
@@ -27,6 +28,12 @@ from vtnote.schemas import Transcript, TranscriptSegment, transcript_sha256
 
 _LANGUAGE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,63})$")
 _TEMPLATES = frozenset({"summary", "key_points", "custom"})
+
+
+class _NotesGraphState(TypedDict):
+    cursor: int
+    nodes: list[dict[str, object]]
+    document: dict[str, object] | None
 
 DEFAULT_NOTES_PROMPT = """你是内容总结编辑。仅依据字幕，为普通读者生成准确、简洁、易读的总结；根据内容场景自然组织，不输出场景判断。
 
@@ -651,6 +658,8 @@ Output contract:
         output_language: str,
         custom_prompt: str | None,
         limits: AiLimits,
+        checkpoint_state: Mapping[str, object] | None = None,
+        progress_callback: Callable[[int, int, dict[str, object]], None] | None = None,
     ) -> NoteDocument:
         if not isinstance(transcript, Transcript):
             raise ValueError("Transcript is required")
@@ -673,8 +682,65 @@ Output contract:
             limits=limits,
         )
         cue_lookup = {segment.id: segment for segment in transcript.segments}
+        all_cue_ids = frozenset(cue_lookup)
+
+        def serialized_node(node: _NoteNode) -> dict[str, object]:
+            return {
+                **node.payload(),
+                "response_model": node.response_model,
+            }
+
+        def restore_nodes(raw_nodes: object) -> list[_NoteNode]:
+            if not isinstance(raw_nodes, list):
+                raise NoteError("note_checkpoint_invalid")
+            restored: list[_NoteNode] = []
+            for raw in raw_nodes:
+                if not isinstance(raw, dict):
+                    raise NoteError("note_checkpoint_invalid")
+                response_model = raw.get("response_model")
+                try:
+                    validate_chat_model(response_model)
+                    node = self._parse_node(
+                        json.dumps(
+                            {
+                                key: value
+                                for key, value in raw.items()
+                                if key != "response_model"
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        response_model=response_model,
+                        cue_lookup=cue_lookup,
+                        allowed_ids=all_cue_ids,
+                        limits=limits,
+                    )
+                except (TypeError, ValueError, NoteError):
+                    raise NoteError("note_checkpoint_invalid") from None
+                restored.append(node)
+            return restored
+
+        cursor = 0
         nodes: list[_NoteNode] = []
-        for chunk in chunks:
+        if checkpoint_state is not None:
+            try:
+                checkpoint_cursor = checkpoint_state.get("cursor")
+                restored = restore_nodes(checkpoint_state.get("nodes"))
+                if (
+                    type(checkpoint_cursor) is not int
+                    or checkpoint_cursor != len(restored)
+                    or not 0 <= checkpoint_cursor <= len(chunks)
+                ):
+                    raise NoteError("note_checkpoint_invalid")
+                cursor = checkpoint_cursor
+                nodes = restored
+            except (NoteError, ValueError):
+                cursor = 0
+                nodes = []
+
+        def map_chunk(state: _NotesGraphState) -> dict[str, object]:
+            index = state["cursor"]
+            chunk = chunks[index]
             request = self._request(
                 operation="map",
                 template=selected_template,
@@ -683,78 +749,112 @@ Output contract:
                 profile=profile,
                 cues=chunk,
             )
-            nodes.append(
-                self._call(
-                    request,
-                    client=client,
-                    cue_lookup=cue_lookup,
-                    allowed_ids=frozenset(cue.id for cue in chunk),
-                    limits=limits,
-                )
-            )
-
-        reduce_level = 0
-        while len(nodes) > 1:
-            if reduce_level >= limits.note_max_reduce_levels:
-                raise NoteError("note_reduce_depth_exceeded")
-            groups = self._reduce_groups(
-                nodes,
-                template=selected_template,
-                output_language=language,
-                custom_prompt=selected_prompt,
-                profile=profile,
+            node = self._call(
+                request,
+                client=client,
+                cue_lookup=cue_lookup,
+                allowed_ids=frozenset(cue.id for cue in chunk),
                 limits=limits,
             )
-            reduced: list[_NoteNode] = []
-            for group in groups:
-                if len(group) == 1:
-                    reduced.append(group[0])
-                    continue
-                request = self._request(
-                    operation="reduce",
+            next_nodes = [*state["nodes"], serialized_node(node)]
+            next_cursor = index + 1
+            if progress_callback is not None:
+                progress_callback(
+                    next_cursor,
+                    len(chunks),
+                    {"nodes": next_nodes},
+                )
+            return {"cursor": next_cursor, "nodes": next_nodes}
+
+        def reduce_notes(state: _NotesGraphState) -> dict[str, object]:
+            reduced_nodes = restore_nodes(state["nodes"])
+            reduce_level = 0
+            while len(reduced_nodes) > 1:
+                if reduce_level >= limits.note_max_reduce_levels:
+                    raise NoteError("note_reduce_depth_exceeded")
+                groups = self._reduce_groups(
+                    reduced_nodes,
                     template=selected_template,
                     output_language=language,
                     custom_prompt=selected_prompt,
                     profile=profile,
-                    nodes=group,
+                    limits=limits,
                 )
-                allowed_ids = frozenset(
-                    cue_id
-                    for node in group
-                    for cue_id in node.lineage()
-                )
-                reduced.append(
-                    self._call(
-                        request,
-                        client=client,
-                        cue_lookup=cue_lookup,
-                        allowed_ids=allowed_ids,
-                        limits=limits,
+                next_level: list[_NoteNode] = []
+                for group in groups:
+                    if len(group) == 1:
+                        next_level.append(group[0])
+                        continue
+                    request = self._request(
+                        operation="reduce",
+                        template=selected_template,
+                        output_language=language,
+                        custom_prompt=selected_prompt,
+                        profile=profile,
+                        nodes=group,
                     )
+                    allowed_ids = frozenset(
+                        cue_id for node in group for cue_id in node.lineage()
+                    )
+                    next_level.append(
+                        self._call(
+                            request,
+                            client=client,
+                            cue_lookup=cue_lookup,
+                            allowed_ids=allowed_ids,
+                            limits=limits,
+                        )
+                    )
+                if len(next_level) >= len(reduced_nodes):
+                    raise NoteError("note_reduce_input_oversize")
+                reduced_nodes = next_level
+                reduce_level += 1
+            self._check_canceled()
+            final = reduced_nodes[0]
+            try:
+                document = NoteDocument(
+                    task_id=self.task_id,
+                    transcript_sha256=transcript_sha256(transcript),
+                    template=selected_template,
+                    output_language=language,
+                    requested_model=profile.model,
+                    response_model=final.response_model,
+                    title=final.title,
+                    summary=final.summary,
+                    summary_citations=final.summary_citations,
+                    key_points=final.key_points,
                 )
-            if len(reduced) >= len(nodes):
-                raise NoteError("note_reduce_input_oversize")
-            nodes = reduced
-            reduce_level += 1
+            except ValueError:
+                raise NoteError("note_response_invalid") from None
+            return {
+                "document": document.validate_against(transcript).model_dump(
+                    mode="json"
+                )
+            }
 
+        def route(state: _NotesGraphState) -> str:
+            return "map_chunk" if state["cursor"] < len(chunks) else "reduce_notes"
+
+        graph = StateGraph(_NotesGraphState)
+        graph.add_node("map_chunk", map_chunk)
+        graph.add_node("reduce_notes", reduce_notes)
+        graph.add_conditional_edges(START, route)
+        graph.add_conditional_edges("map_chunk", route)
+        graph.add_edge("reduce_notes", END)
+        output = graph.compile().invoke(
+            {
+                "cursor": cursor,
+                "nodes": [serialized_node(node) for node in nodes],
+                "document": None,
+            }
+        )
         self._check_canceled()
-        final = nodes[0]
         try:
-            document = NoteDocument(
-                task_id=self.task_id,
-                transcript_sha256=transcript_sha256(transcript),
-                template=selected_template,
-                output_language=language,
-                requested_model=profile.model,
-                response_model=final.response_model,
-                title=final.title,
-                summary=final.summary,
-                summary_citations=final.summary_citations,
-                key_points=final.key_points,
+            return NoteDocument.model_validate(output["document"]).validate_against(
+                transcript
             )
-        except ValueError:
+        except (KeyError, TypeError, ValueError):
             raise NoteError("note_response_invalid") from None
-        return document.validate_against(transcript)
 
     def generate_and_write(
         self,
@@ -769,6 +869,8 @@ Output contract:
         paths: StoragePaths,
         item_id: str,
         note_id: str,
+        checkpoint_state: Mapping[str, object] | None = None,
+        progress_callback: Callable[[int, int, dict[str, object]], None] | None = None,
     ) -> NoteDocument:
         document = self.generate(
             transcript,
@@ -778,6 +880,8 @@ Output contract:
             output_language=output_language,
             custom_prompt=custom_prompt,
             limits=limits,
+            checkpoint_state=checkpoint_state,
+            progress_callback=progress_callback,
         )
         self._check_canceled()
         write_note_markdown(

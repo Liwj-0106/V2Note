@@ -1,6 +1,6 @@
-# VtNote 协作约束
+# V2Note 协作约束
 
-本文件适用于整个 VtNote 项目。只记录明确、可执行且可长期维护的规则。
+本文件适用于整个 V2Note 项目。只记录明确、可执行且可长期维护的规则。
 
 ## 开始与边界
 
@@ -20,7 +20,7 @@
 
 ## 架构
 
-- `src/vtnote/launcher.py` 监督 API 与独立 Worker；耐久任务继续使用 SQLite 队列、租约和恢复点。
+- `src/vtnote/launcher.py` 监督 API 与独立 Worker；本机模式使用 SQLite 阶段队列，服务端模式使用 MySQL 阶段状态与 Kafka 消息，并通过租约和恢复点保护任务。
 - `src/vtnote/api.py`、`tasks.py`、`configuration.py` 只保留兼容门面与组合逻辑。新 HTTP 职责进入 `src/vtnote/http/`，跨入口合同进入 `src/vtnote/application/`，业务能力进入专用模块。
 - 保留 `vtnote.api`、`vtnote.tasks`、`vtnote.configuration` 的兼容导入路径。
 - API 与 Worker 共用的重试边界、阶段模型判定和结果产物规则分别维护在 `retry_policy.py`、`stage_models.py` 和 `result_artifacts.py`；不得在服务或 Worker 中复制实现。
@@ -71,6 +71,7 @@ git diff --check
 ```
 
 - 安装验证使用 `environment.yml` 和 `frontend/package-lock.json`，不得依赖已有 editable 安装判断成功。
+- 从源码启动前，在当前仓库根目录执行 `python -m pip install -e ".[dev]"`；仓库目录迁移后必须重新执行，避免 Conda 环境仍指向旧路径。
 - 打包产物必须位于项目 `dist/`，wheel 必须包含生产前端、模型清单和内置验证音频。
 - 启动验证至少检查 `/api/health` 与 `/api/readiness`；测试服务和打包暂存只使用项目内 `.vtnote/Cache/` 隔离数据。
 - README 只保留用途、目录结构、运行、测试和部署/打包信息；详细产品与技术合同放在 `docs/`。

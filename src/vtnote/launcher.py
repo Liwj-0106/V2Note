@@ -24,6 +24,7 @@ from vtnote.api import create_app
 from vtnote.config import Settings
 from vtnote.database import initialize_database
 from vtnote.local_asr import FasterWhisperTranscriber
+from vtnote.kafka_queue import KafkaStageQueue
 from vtnote.logging_setup import configure_logging
 from vtnote.maintenance import MaintenanceLoop, build_maintenance_service
 from vtnote.media import CommandRunner, FfmpegBinaries, FfmpegMediaProcessor
@@ -217,6 +218,7 @@ def run_worker(settings: Settings) -> int:
     engine = initialize_database(
         paths.database,
         sensitive_text_protector=protector,
+        database_url=settings.database_url,
     )
     secrets = KeyringSecretStore()
     resolver = SocketResolver()
@@ -306,6 +308,15 @@ def run_worker(settings: Settings) -> int:
         handlers=handlers,
         lease_duration=timedelta(minutes=2),
         stop_requested=stop_event.is_set,
+        stage_queue=(
+            KafkaStageQueue(
+                bootstrap_servers=settings.kafka_bootstrap_servers,
+                topic=settings.kafka_stage_topic,
+                consumer_group=settings.kafka_consumer_group,
+            )
+            if settings.kafka_bootstrap_servers is not None
+            else None
+        ),
     )
     installer = build_model_installer_loop(
         engine=engine,

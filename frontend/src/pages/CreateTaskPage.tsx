@@ -74,7 +74,7 @@ function errorMessage(error: unknown): string {
       return "检测到代理 Fake-IP。请在代理软件中排除该平台域名后重试。";
     }
     if (error.code === "auth_required") {
-      return "该平台仍要求登录或验证 Cookie。请确认已在授权浏览器中登录；Windows Chrome/Edge 无法导入时请改用 Firefox，然后重启 VtNote。";
+      return "该平台仍要求登录或验证 Cookie。请确认已在授权浏览器中登录；Windows Chrome/Edge 无法导入时请改用 Firefox，然后重启 V2Note。";
     }
     if (error.code === "temporary") return "平台暂时不可用，请稍后重试。";
     if (error.code === "removed") return "视频已删除或当前不可访问。";

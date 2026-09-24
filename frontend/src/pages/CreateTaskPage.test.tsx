@@ -704,7 +704,7 @@ describe("CreateTaskPage", () => {
 
     expect(
       await screen.findByText(
-        "该平台仍要求登录或验证 Cookie。请确认已在授权浏览器中登录；Windows Chrome/Edge 无法导入时请改用 Firefox，然后重启 VtNote。",
+        "该平台仍要求登录或验证 Cookie。请确认已在授权浏览器中登录；Windows Chrome/Edge 无法导入时请改用 Firefox，然后重启 V2Note。",
       ),
     ).toBeInTheDocument();
   });

@@ -20,6 +20,7 @@ from vtnote.models import (
     TaskRecord,
 )
 from vtnote.paths import StoragePaths, UnsafePathError
+from vtnote.persistence import begin_write_transaction
 
 
 TRASH_RETENTION = timedelta(hours=24)
@@ -210,7 +211,7 @@ class RuntimeAssetService:
             self.session.rollback()
         connection = self.session.connection()
         try:
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            begin_write_transaction(connection)
         except OperationalError as error:
             self.session.rollback()
             raise RuntimeAssetError("database_busy") from error

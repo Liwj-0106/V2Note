@@ -1,4 +1,4 @@
-"""Read-only capability inspection for the local VtNote installation."""
+"""Read-only capability inspection for the local V2Note installation."""
 
 from __future__ import annotations
 

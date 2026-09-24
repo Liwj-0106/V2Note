@@ -20,6 +20,7 @@ from vtnote.models import (
     StageRunRecord,
 )
 from vtnote.paths import StoragePaths
+from vtnote.persistence import begin_write_transaction
 from vtnote.runtime_assets import RuntimeAssetService
 from vtnote.secrets import SecretStore
 from vtnote.tencent_asr import (
@@ -70,7 +71,7 @@ class MaintenanceLease:
     def acquire(self, now: datetime) -> bool:
         timestamp = _utc(now)
         with Session(self.engine) as session:
-            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            begin_write_transaction(session.connection())
             row = session.get(ResourceLeaseRecord, self.RESOURCE_KEY)
             if (
                 row is not None
@@ -96,7 +97,7 @@ class MaintenanceLease:
 
     def release(self) -> None:
         with Session(self.engine) as session:
-            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            begin_write_transaction(session.connection())
             row = session.get(ResourceLeaseRecord, self.RESOURCE_KEY)
             if row is not None and row.lease_owner == self.owner:
                 session.delete(row)

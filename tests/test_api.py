@@ -1436,7 +1436,7 @@ def test_probe_extracts_supported_url_from_share_text(tmp_path: Path) -> None:
                 "url": (
                     "推荐这个视频：\n"
                     "https://youtu.be/abc。\n"
-                    "复制链接后打开 VtNote"
+                    "复制链接后打开 V2Note"
                 )
             },
         )

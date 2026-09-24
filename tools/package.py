@@ -1,4 +1,4 @@
-"""Build and verify a self-contained VtNote wheel from the project root."""
+"""Build and verify a self-contained V2Note wheel from the project root."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def package_lock() -> Iterator[None]:
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            raise RuntimeError("another VtNote package build is already running") from None
+            raise RuntimeError("another V2Note package build is already running") from None
         try:
             yield
         finally:
@@ -90,7 +90,7 @@ def run() -> Path:
         )
     wheels = list(DIST.glob("vtnote-*.whl"))
     if len(wheels) != 1:
-        raise RuntimeError("expected exactly one VtNote wheel")
+        raise RuntimeError("expected exactly one V2Note wheel")
     wheel = wheels[0]
     with ZipFile(wheel) as archive:
         members = set(archive.namelist())

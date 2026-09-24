@@ -30,6 +30,7 @@ from vtnote.models import (
     StageRunRecord,
 )
 from vtnote.paths import StoragePaths
+from vtnote.persistence import begin_write_transaction
 from vtnote.provider_credentials import TencentCredentialBundle
 from vtnote.runtime_assets import RuntimeAssetError, RuntimeAssetService
 from vtnote.tencent_contract import (
@@ -473,7 +474,7 @@ class TencentSubmissionReconciler:
 
     @staticmethod
     def _begin(session: Session) -> None:
-        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        begin_write_transaction(session.connection())
 
     @staticmethod
     def _due_at(row: CloudSubmissionRecord) -> datetime:

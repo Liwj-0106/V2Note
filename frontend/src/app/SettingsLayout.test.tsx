@@ -17,9 +17,9 @@ describe("SettingsLayout", () => {
     );
 
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
-    expect(screen.queryByText("VtNote")).not.toBeInTheDocument();
+    expect(screen.queryByText("V2Note")).not.toBeInTheDocument();
     expect(
-      screen.queryByText("调整 VtNote 的界面、导出与模型偏好。"),
+      screen.queryByText("调整 V2Note 的界面、导出与模型偏好。"),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "通用" })).toHaveAttribute(
       "href",

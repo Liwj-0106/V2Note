@@ -24,6 +24,7 @@ from vtnote.models import (
     SensitiveTextMigrationRecord,
     TaskRecord,
 )
+from vtnote.persistence import begin_write_transaction
 
 
 DEFAULT_PROMPT_PURPOSE = "defaults:notes_custom_prompt"
@@ -367,7 +368,7 @@ def migrate_sensitive_text(
     connection = engine.connect()
     session = Session(bind=connection)
     try:
-        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        begin_write_transaction(connection)
         _protect_legacy_rows(session, selected)
         state = session.get(SensitiveTextMigrationRecord, 1)
         if state is None:
@@ -387,7 +388,7 @@ def migrate_sensitive_text(
     failure_connection = engine.connect()
     failure_session = Session(bind=failure_connection)
     try:
-        failure_connection.exec_driver_sql("BEGIN IMMEDIATE")
+        begin_write_transaction(failure_connection)
         status = (
             MIGRATION_REQUIRED
             if _legacy_plaintext_exists(failure_session)

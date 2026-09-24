@@ -367,13 +367,13 @@ def _clean_base_url(
         raise InvalidConfiguration("invalid provider base URL") from error
     if parts.username or parts.password or parts.query or parts.fragment:
         raise InvalidConfiguration("invalid provider base URL")
-    if not host or port not in {None, 443}:
+    if not host:
         raise InvalidConfiguration("invalid provider base URL")
     if parts.scheme == "http":
         raise InvalidConfiguration("cloud provider base URL must use HTTPS")
     if parts.scheme not in {"http", "https"}:
         raise InvalidConfiguration("invalid provider base URL")
-    if parts.scheme != "https":
+    if port not in {None, 443}:
         raise InvalidConfiguration("invalid provider base URL")
     try:
         normalize_host(host)

@@ -170,7 +170,7 @@ class TencentCosStager:
 
 
 class QcloudCosSdkAdapter:
-    """Narrow wrapper around the pinned COS SDK surface used by VtNote."""
+    """Narrow wrapper around the pinned COS SDK surface used by V2Note."""
 
     __slots__ = ("client",)
 
