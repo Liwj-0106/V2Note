@@ -73,6 +73,16 @@ class ModelInstaller(Protocol):
     def run_one(self) -> str | None: ...
 
 
+class StageQueue(Protocol):
+    def publish(self, stage_run_id: str) -> None: ...
+
+    def receive(self, *, timeout_ms: int = 1000) -> str | None: ...
+
+    def acknowledge(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
 class RoundRobinModelInstaller:
     """Poll multiple model installers without concurrent SQLite claims."""
 
@@ -196,6 +206,7 @@ class Worker:
         stop_requested: Callable[[], bool] = lambda: False,
         initial_idle_delay: float = 0.1,
         maximum_idle_delay: float = 2.0,
+        stage_queue: StageQueue | None = None,
     ) -> None:
         if not worker_id:
             raise ValueError("worker id is required")
@@ -212,9 +223,13 @@ class Worker:
         self.stop_requested = stop_requested
         self.initial_idle_delay = initial_idle_delay
         self.maximum_idle_delay = maximum_idle_delay
+        self.stage_queue = stage_queue
 
     def run(self) -> None:
         self.store.recover_expired(self.clock())
+        if self.stage_queue is not None:
+            self._run_kafka()
+            return
         idle_delay = self.initial_idle_delay
         while not self.stop_requested():
             claim = self.store.claim_next(
@@ -227,50 +242,73 @@ class Worker:
                 idle_delay = min(self.maximum_idle_delay, idle_delay * 2)
                 continue
             idle_delay = self.initial_idle_delay
-            handler = self.handlers.get(claim.stage)
-            if handler is None:
-                self.store.fail(
-                    claim,
-                    StageFailure(
-                        error_code="handler_unavailable",
-                        error_message=f"no handler registered for {claim.stage}",
-                    ),
-                    now=self.clock(),
-                )
-                continue
-            context = StageContext(store=self.store, claim=claim, clock=self.clock)
-            try:
-                result = handler.run(context)
-            except StageCancelled:
-                continue
-            except StageDeferred as deferred:
-                self.store.defer_external(
-                    claim,
-                    deferred,
-                    now=self.clock(),
-                )
-            except StageRequeue:
-                self.store.requeue(claim, now=self.clock())
-            except StageExecutionError as error:
-                self.store.fail(
-                    claim,
-                    StageFailure(
-                        error_code=error.code,
-                        error_message=error.code,
-                        external_submission_state=error.external_submission_state,
-                        warning=error.warning,
-                    ),
-                    now=self.clock(),
-                )
-            except Exception as error:
-                self.store.fail(
-                    claim,
-                    StageFailure(
-                        error_code="handler_failed",
-                        error_message=sanitize_diagnostic(str(error))
-                        or "handler failed",
-                    ),
-                    now=self.clock(),
-                )
-            else:
-                self.store.complete(claim, result, now=self.clock())
+            self._execute(claim)
+
+    def _run_kafka(self) -> None:
+        assert self.stage_queue is not None
+        try:
+            while not self.stop_requested():
+                for stage_run_id in self.store.runnable_stage_ids(now=self.clock()):
+                    self.stage_queue.publish(stage_run_id)
+                    self.store.mark_dispatched(stage_run_id, now=self.clock())
+                stage_run_id = self.stage_queue.receive(timeout_ms=1000)
+                if stage_run_id is None:
+                    continue
+                try:
+                    claim = self.store.claim_next(
+                        self.worker_id,
+                        self.clock(),
+                        self.lease_duration,
+                        stage_run_id=stage_run_id,
+                    )
+                    if claim is not None:
+                        self._execute(claim)
+                finally:
+                    self.stage_queue.acknowledge()
+        finally:
+            self.stage_queue.close()
+
+    def _execute(self, claim: StageClaim) -> None:
+        handler = self.handlers.get(claim.stage)
+        if handler is None:
+            self.store.fail(
+                claim,
+                StageFailure(
+                    error_code="handler_unavailable",
+                    error_message=f"no handler registered for {claim.stage}",
+                ),
+                now=self.clock(),
+            )
+            return
+        context = StageContext(store=self.store, claim=claim, clock=self.clock)
+        try:
+            result = handler.run(context)
+        except StageCancelled:
+            return
+        except StageDeferred as deferred:
+            self.store.defer_external(claim, deferred, now=self.clock())
+        except StageRequeue:
+            self.store.requeue(claim, now=self.clock())
+        except StageExecutionError as error:
+            self.store.fail(
+                claim,
+                StageFailure(
+                    error_code=error.code,
+                    error_message=error.code,
+                    external_submission_state=error.external_submission_state,
+                    warning=error.warning,
+                ),
+                now=self.clock(),
+            )
+        except Exception as error:
+            self.store.fail(
+                claim,
+                StageFailure(
+                    error_code="handler_failed",
+                    error_message=sanitize_diagnostic(str(error))
+                    or "handler failed",
+                ),
+                now=self.clock(),
+            )
+        else:
+            self.store.complete(claim, result, now=self.clock())

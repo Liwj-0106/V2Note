@@ -164,7 +164,7 @@ describe("InlineSummaryConnections", () => {
 
     expect(
       await screen.findByRole("alert", {
-        name: "当前服务尚未加载该模型协议，请重启 VtNote 后重试。",
+        name: "当前服务尚未加载该模型协议，请重启 V2Note 后重试。",
       }),
     ).toBeInTheDocument();
     expect(

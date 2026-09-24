@@ -19,7 +19,7 @@ describe("GeneralSettingsPage", () => {
       screen.queryByText("选择界面语言与显示方式，修改会立即生效。"),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByText("让 VtNote 适应你的工作环境。"),
+      screen.queryByText("让 V2Note 适应你的工作环境。"),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("选择浅色、深色，或自动跟随系统。"),

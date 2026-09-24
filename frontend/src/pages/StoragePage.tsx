@@ -116,7 +116,7 @@ export function StoragePage() {
         <div className="section-heading-row">
           <div>
             <h2>回收区</h2>
-            <p>这里只能恢复 VtNote 自己创建并登记的临时媒体。</p>
+            <p>这里只能恢复 V2Note 自己创建并登记的临时媒体。</p>
           </div>
         </div>
         {loading ? (

@@ -1,6 +1,6 @@
-# VtNote 安装、启动与备份
+# V2Note 安装、启动与备份
 
-VtNote 当前支持 Windows 10/11。本地进程只监听 `127.0.0.1:8766`，由一个
+V2Note 当前支持 Windows 10/11。本地进程只监听 `127.0.0.1:8766`，由一个
 supervisor 同时管理 FastAPI 和独立 Worker。
 
 ## 环境要求
@@ -15,12 +15,14 @@ supervisor 同时管理 FastAPI 和独立 Worker。
 ```powershell
 conda env create -f environment.yml
 conda activate vtnote
+python -m pip install -e ".[dev]"
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-环境已存在时使用 `conda env update -f environment.yml --prune`，再重复 pip 安装和
-前端构建。不要在运行时自动下载未登记的 Python、Deno 或模型组件。
+环境已存在时使用 `conda env update -f environment.yml --prune`，再重复上面的 editable
+安装和前端构建。仓库目录发生迁移后也要重新执行 editable 安装，确保环境指向当前目录。
+不要在运行时自动下载未登记的 Python、Deno 或模型组件。
 
 ## 启动与停止
 
@@ -38,6 +40,30 @@ API 和 Worker。
 Invoke-RestMethod http://127.0.0.1:8766/api/health
 Invoke-RestMethod http://127.0.0.1:8766/api/readiness
 ```
+
+## 服务端架构模式
+
+服务端模式用 MySQL 保存任务阶段和总结游标，通过 Kafka 派发阶段任务，并用 Redis
+缓存来源幂等映射；默认 Windows 本机模式仍可直接使用 SQLite。启动本地依赖：
+
+```powershell
+Copy-Item .env.example .env
+# 编辑 .env 中的两个示例密码
+docker compose -f docker-compose.server.yml up -d
+```
+
+对应用进程设置服务端连接项后再启动 `vtnote`：
+
+```powershell
+$env:VTNOTE_DATABASE_URL = 'mysql+pymysql://v2note:<URL编码密码>@127.0.0.1:8768/v2note?charset=utf8mb4'
+$env:VTNOTE_KAFKA_BOOTSTRAP_SERVERS = '127.0.0.1:8769'
+$env:VTNOTE_REDIS_URL = 'redis://127.0.0.1:8770/0'
+vtnote
+```
+
+连接项必须一起配置。首次连接空 MySQL 数据库时会创建表；现有 SQLite 数据库不会
+自动迁移到 MySQL。Compose 仅用于本机开发，端口均绑定回环地址，不带生产级认证、
+TLS、备份与高可用设置。
 
 ## 首次配置
 
@@ -78,7 +104,7 @@ $env:VTNOTE_PLATFORM_PROXY_URL = 'http://127.0.0.1:<端口>'
 ```
 
 只允许无用户名/密码、无路径的 `127.0.0.1` 或 `[::1]` 地址。该设置不会读取代理
-凭据；目标 URL、重定向、请求体大小和 TLS 主机名仍由 VtNote 校验。未配置时使用
+凭据；目标 URL、重定向、请求体大小和 TLS 主机名仍由 V2Note 校验。未配置时使用
 DNS 固定直连。
 
 在用户明确授权后，可为抖音和 YouTube 分别加载 Chrome 导出的 Netscape
@@ -101,7 +127,7 @@ Data、Cache 和 ManagedAssets 必须互不包含。目录内容和清理边界�
 
 ## 备份与迁移
 
-1. 停止 VtNote。
+1. 停止 V2Note。
 2. 备份完整 `Data`；若任务仍在运行或需要保留音频导出，也同时备份 `Cache`。
 3. Windows Credential Manager 中的云凭据不在文件备份内，需要单独重新配置。
 4. 迁移后保持两个根目录和数据库中文件引用一致，再启动应用检查内容库。
@@ -110,8 +136,8 @@ Data、Cache 和 ManagedAssets 必须互不包含。目录内容和清理边界�
 整目录删除。只使用应用内删除/回收机制，或在确认没有活动任务且不需要缓存产物后
 人工清理。
 
-DownKyi 与 VtNote 没有运行时集成。可把 DownKyi 单独下载得到的本地音视频作为普通
-本地文件导入 VtNote；VtNote 不读取其 Cookie、SQLite、aria2 会话或程序目录。
+DownKyi 与 V2Note 没有运行时集成。可把 DownKyi 单独下载得到的本地音视频作为普通
+本地文件导入 V2Note；V2Note 不读取其 Cookie、SQLite、aria2 会话或程序目录。
 
 ## 打包
 
@@ -121,5 +147,5 @@ python tools/package.py
 ```
 
 产物位于项目 `dist/`。wheel 内包含生产前端、模型清单和内置验证音频。打包与 wheel
-安装冒烟检查会在这些资源缺失时失败；安装后的 VtNote 不再读取源码仓库中的
+安装冒烟检查会在这些资源缺失时失败；安装后的 V2Note 不再读取源码仓库中的
 `frontend/dist`、`assets` 或根目录环境文件。

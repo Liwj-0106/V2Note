@@ -29,7 +29,7 @@ function publicError(caught: unknown, fallback: string): string {
   if (!(caught instanceof ApiError)) return fallback;
   const message = caught.message.toLowerCase();
   if (message.includes("unsupported provider protocol")) {
-    return "当前服务尚未加载该模型协议，请重启 VtNote 后重试。";
+    return "当前服务尚未加载该模型协议，请重启 V2Note 后重试。";
   }
   if (message.includes("invalid provider credentials")) {
     return "API Key 无效，请检查后重试。";

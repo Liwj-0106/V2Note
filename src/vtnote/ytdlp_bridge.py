@@ -1,4 +1,4 @@
-"""Controlled yt-dlp bridge using only VtNote's pinned HTTPS transport."""
+"""Controlled yt-dlp bridge using only V2Note's pinned HTTPS transport."""
 
 from __future__ import annotations
 

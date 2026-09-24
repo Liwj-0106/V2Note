@@ -1,11 +1,11 @@
-# VtNote 产品与技术调研
+# V2Note 产品与技术调研
 
 校准日期：2026-08-30
 原则：只记录会影响当前产品或技术决策的结论；价格、热度和营销数字不作为架构依据。
 
 ## 结论
 
-VtNote 不需要变成完整下载器或通用知识库。其差异化应保持为：
+V2Note 不需要变成完整下载器或通用知识库。其差异化应保持为：
 
 - 本机任务和规范字幕长期保存；
 - B 站链接与本地音视频走同一可靠流水线；
@@ -16,9 +16,9 @@ VtNote 不需要变成完整下载器或通用知识库。其差异化应保持�
 
 ## 产品调研
 
-| 产品/项目 | 可观察能力 | 对 VtNote 的启发 | 不采用或不照搬 |
+| 产品/项目 | 可观察能力 | 对 V2Note 的启发 | 不采用或不照搬 |
 |---|---|---|---|
-| [BiliNote](https://github.com/JefferyHcool/BiliNote) | 视频链接到 Markdown 笔记、截图/原片跳转、AI 问答，提供本地部署和托管版 | 笔记应保持结构、来源定位和后续复用能力 | VtNote 当前不扩大到截图、RAG、托管 SaaS；先保证字幕和本机恢复 |
+| [BiliNote](https://github.com/JefferyHcool/BiliNote) | 视频链接到 Markdown 笔记、截图/原片跳转、AI 问答，提供本地部署和托管版 | 笔记应保持结构、来源定位和后续复用能力 | V2Note 当前不扩大到截图、RAG、托管 SaaS；先保证字幕和本机恢复 |
 | [BibiGPT Skill](https://github.com/JimmyLv/bibigpt-skill) | URL 摘要、章节、字幕、批处理、MCP/CLI/API | 字幕-only、章节和机器可读输出应是独立意图 | 远程服务、OAuth/MCP 和多平台批量不是当前本机 V1 范围 |
 | [NotebookLM](https://support.google.com/notebooklm/answer/16164461) | 多来源研究、基于来源的问答与引用、报告/导览等派生产物 | 长期方向是让字幕成为可引用来源，而不是只生成一次性摘要 | YouTube 导入依赖公开字幕；云端知识库的数据模型和隐私边界不同，不作为当前架构模板 |
 | [MacWhisper](https://www.macwhisper.com/) | 多文件批量转写、字幕检索、音频同步回听和速度控制 | 批量导入应保持一文件一任务；校对入口应与字幕和时间码共处 | 不引入独立媒体库、订阅或新的设置层级 |
@@ -63,7 +63,7 @@ VtNote 不需要变成完整下载器或通用知识库。其差异化应保持�
 
 截图中的 appcompat、Material、RecyclerView、Lottie 等主要是 Android UI；Gson、OkHttp/Okio、Kotlin coroutines、commons-compress、isoparser、Apache POI/StAX 分别对应 JSON、网络流、结构化并发、压缩、MP4 容器和 Office/XML。它们证明 vivo 做了依赖披露，但没有出现录音引擎、音频编解码器、降噪或 ASR 模型，因此不能反推出录音机识别架构。
 
-对 VtNote 真正有用的是设计思想而不是 Java/Kotlin 依赖替换：HTTPX 已覆盖连接池、流式读取和取消；Worker lease/checkpoint 应继续贯彻 coroutines 式结构化取消；FFprobe 已比单独引入 isoparser 更适合当前多容器探测。Office/动画/UI 依赖与本次字幕失败无关，不引入。vivo 官方把 OSPO 和开源项目放在独立门户，可作为未来自动生成依赖清单的产品参考：[vivo OSPO](https://tech.vivo.com/OSPO/)、[vivo Open Source](https://opensource.vivo.com/)。许可展示页面按当前产品优先级延期。
+对 V2Note 真正有用的是设计思想而不是 Java/Kotlin 依赖替换：HTTPX 已覆盖连接池、流式读取和取消；Worker lease/checkpoint 应继续贯彻 coroutines 式结构化取消；FFprobe 已比单独引入 isoparser 更适合当前多容器探测。Office/动画/UI 依赖与本次字幕失败无关，不引入。vivo 官方把 OSPO 和开源项目放在独立门户，可作为未来自动生成依赖清单的产品参考：[vivo OSPO](https://tech.vivo.com/OSPO/)、[vivo Open Source](https://opensource.vivo.com/)。许可展示页面按当前产品优先级延期。
 
 ### 数据和部署
 
@@ -94,7 +94,7 @@ VtNote 不需要变成完整下载器或通用知识库。其差异化应保持�
 
 ### 可以借鉴
 
-| 思想 | VtNote 落点 |
+| 思想 | V2Note 落点 |
 |---|---|
 | 音频/字幕等内容独立选择 | 已由生成与导出偏好实现；继续保持字幕与 AI 解耦 |
 | 清晰阶段与进度 | 映射到 stage run、progress 和内容库行内状态 |
@@ -106,7 +106,7 @@ VtNote 不需要变成完整下载器或通用知识库。其差异化应保持�
 ### 采用门禁
 
 - 项目根 `LICENSE` 是 GPL-3.0。GNU FAQ 明确允许修改后仅作个人/组织内部使用而不公开源码；一旦对外分发，义务重新生效。因此内部实验可以做，但复制代码必须记录来源、隔离变更，并把“是否分发”作为发布门禁：[GNU GPL FAQ](https://www.gnu.org/licenses/gpl-faq.en.html#GPLRequireSourcePostedPublic)。
-- 发行 FFmpeg 自报 GPL-3.0-or-later 并启用 x264/x265，但 VtNote 当前只需解码、抽音频和 Opus/AAC/MP3，不会因该构建获得本次 ASR 路径的收益；不替换现有开发构建。
+- 发行 FFmpeg 自报 GPL-3.0-or-later 并启用 x264/x265，但 V2Note 当前只需解码、抽音频和 Opus/AAC/MP3，不会因该构建获得本次 ASR 路径的收益；不替换现有开发构建。
 - aria2 可以实验，但 DownKyi 的监听全部地址、任意 Origin、关闭证书检查和静态 token 配置绝不采用。aria2 官方默认只监听 loopback、默认不允许任意 Origin，并强烈建议设置 `rpc-secret`：[aria2 RPC 手册](https://aria2.github.io/manual/en/html/aria2c.html#rpc-options)。
 - 固定密码保护设置、`BinaryFormatter` BLOB、字符串 SQL、同步阻塞进程和先删除目标/源文件的 FFmpeg 流程不采用。
 - 2023 年 B 站私有接口可以作为无登录实验 adapter 的参考，但不能成为唯一生产路径；必须有合同测试、版本开关和 yt-dlp 后备。

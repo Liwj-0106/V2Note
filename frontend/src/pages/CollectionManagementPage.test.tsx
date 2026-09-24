@@ -44,7 +44,7 @@ describe("CollectionManagementPage", () => {
     expect(await screen.findByRole("heading", { name: "我创建的合集" })).toBeInTheDocument();
     expect(screen.queryByText("Collections")).not.toBeInTheDocument();
     expect(screen.queryByText("按主题整理视频总结，让常用内容保持清晰可找。")).not.toBeInTheDocument();
-    expect(screen.queryByText("VtNote collection")).not.toBeInTheDocument();
+    expect(screen.queryByText("V2Note collection")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "文件夹" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /所有总结/ })).toHaveAttribute("href", "/tasks");
     expect(screen.getByRole("link", { name: /未分类/ })).toHaveAttribute(

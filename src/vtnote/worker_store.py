@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import re
 from collections.abc import Mapping
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from vtnote.diagnostics import sanitize_diagnostic
 from vtnote.models import (
     ItemRecord,
+    NotesGraphCheckpointRecord,
     ResourceLeaseRecord,
     StageRunRecord,
     TaskRecord,
@@ -33,6 +35,7 @@ from vtnote.pipeline import (
     validate_stage_progress,
 )
 from vtnote.stage_models import allowed_stage_models
+from vtnote.persistence import begin_write_transaction
 
 
 _ERROR_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
@@ -166,7 +169,7 @@ class WorkerStore:
 
     @staticmethod
     def _begin_immediate(session: Session) -> None:
-        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        begin_write_transaction(session.connection())
 
     @staticmethod
     def _latest_by_stage(item: ItemRecord) -> dict[str, StageRunRecord]:
@@ -178,6 +181,66 @@ class WorkerStore:
         return latest
 
     _allowed_stage_models = staticmethod(allowed_stage_models)
+
+    def load_notes_graph_checkpoint(
+        self, stage_run_id: str
+    ) -> dict[str, Any] | None:
+        with Session(self.engine) as session:
+            row = session.get(NotesGraphCheckpointRecord, stage_run_id)
+            if row is None:
+                return None
+            return {
+                "cursor": row.cursor,
+                "total": row.total,
+                "state": copy.deepcopy(row.state_json),
+            }
+
+    def save_notes_graph_checkpoint(
+        self,
+        claim: StageClaim,
+        *,
+        cursor: int,
+        total: int,
+        state: Mapping[str, Any],
+        now: datetime,
+    ) -> bool:
+        if (
+            claim.stage != "notes"
+            or type(cursor) is not int
+            or type(total) is not int
+            or total < 1
+            or not 0 <= cursor <= total
+        ):
+            raise ValueError("invalid notes graph cursor")
+        normalized = json.loads(json.dumps(state, ensure_ascii=False))
+        if not isinstance(normalized, dict):
+            raise ValueError("notes graph state must be an object")
+        now = _utc(now)
+        with Session(self.engine) as session:
+            self._begin_immediate(session)
+            stage = session.get(
+                StageRunRecord, claim.stage_run_id, with_for_update=True
+            )
+            if not self._claim_matches(stage, claim, now):
+                session.rollback()
+                return False
+            row = session.get(NotesGraphCheckpointRecord, claim.stage_run_id)
+            if row is None:
+                row = NotesGraphCheckpointRecord(
+                    stage_run_id=claim.stage_run_id,
+                    cursor=cursor,
+                    total=total,
+                    state_json=normalized,
+                    updated_at=now,
+                )
+                session.add(row)
+            else:
+                row.cursor = cursor
+                row.total = total
+                row.state_json = normalized
+                row.updated_at = now
+            session.commit()
+            return True
 
     @classmethod
     def _recalculate_item_and_task(
@@ -275,6 +338,8 @@ class WorkerStore:
         worker_id: str,
         now: datetime,
         lease_duration: timedelta,
+        *,
+        stage_run_id: str | None = None,
     ) -> StageClaim | None:
         if not worker_id or lease_duration <= timedelta(0):
             raise ValueError("worker id and positive lease duration are required")
@@ -296,6 +361,8 @@ class WorkerStore:
                         continue
                     latest = self._latest_by_stage(item)
                     for stage, row in latest.items():
+                        if stage_run_id is not None and row.id != stage_run_id:
+                            continue
                         if row.status != "queued" or stage not in STAGE_ORDER:
                             continue
                         if not self._source_input_ready(item, stage):
@@ -320,7 +387,16 @@ class WorkerStore:
             if not candidates:
                 session.rollback()
                 return None
-            row = min(candidates, key=lambda candidate: candidate[:4])[4]
+            candidate = min(candidates, key=lambda candidate: candidate[:4])[4]
+            row = session.scalar(
+                select(StageRunRecord)
+                .where(StageRunRecord.id == candidate.id)
+                .with_for_update(skip_locked=True)
+                .execution_options(populate_existing=True)
+            )
+            if row is None or row.status != "queued":
+                session.rollback()
+                return None
             expires_at = now + lease_duration
             row.status = "running"
             row.lease_owner = worker_id
@@ -354,11 +430,68 @@ class WorkerStore:
             session.commit()
             return claim
 
+    def runnable_stage_ids(self, *, now: datetime) -> tuple[str, ...]:
+        """Find ready queued stages that need delivery or delivery retry."""
+
+        now = _utc(now)
+        dispatch_retry_before = now - timedelta(minutes=2)
+        with Session(self.engine) as session:
+            tasks = session.scalars(
+                select(TaskRecord)
+                .options(
+                    selectinload(TaskRecord.items).selectinload(ItemRecord.stage_runs)
+                )
+            ).all()
+            candidates: list[tuple[datetime, int, str, int, str]] = []
+            for task in tasks:
+                if task.status not in _ELIGIBLE_CONTAINER_STATUSES:
+                    continue
+                for item in task.items:
+                    if item.status not in _ELIGIBLE_CONTAINER_STATUSES:
+                        continue
+                    latest = self._latest_by_stage(item)
+                    for stage, row in latest.items():
+                        if (
+                            row.status != "queued"
+                            or (
+                                row.dispatched_at is not None
+                                and row.dispatched_at > dispatch_retry_before
+                            )
+                            or stage not in STAGE_ORDER
+                            or not self._source_input_ready(item, stage)
+                        ):
+                            continue
+                        if any(
+                            dependency not in latest
+                            or latest[dependency].status not in SUCCESSFUL_STAGE_STATUSES
+                            for dependency in STAGE_DEPENDENCIES[stage]
+                        ):
+                            continue
+                        candidates.append(
+                            (task.created_at, STAGE_ORDER[stage], item.id, row.attempt, row.id)
+                        )
+            return tuple(row[4] for row in sorted(candidates))
+
+    def mark_dispatched(self, stage_run_id: str, *, now: datetime) -> bool:
+        now = _utc(now)
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(StageRunRecord)
+                .where(StageRunRecord.id == stage_run_id)
+                .with_for_update(skip_locked=True)
+            )
+            if row is None or row.status != "queued":
+                session.rollback()
+                return False
+            row.dispatched_at = now
+            session.commit()
+            return True
+
     def heartbeat(self, claim: StageClaim, now: datetime) -> bool:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(row, claim, now):
                 session.rollback()
                 return False
@@ -403,7 +536,9 @@ class WorkerStore:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            stage = session.get(StageRunRecord, claim.stage_run_id)
+            stage = session.get(
+                StageRunRecord, claim.stage_run_id, with_for_update=True
+            )
             if not self._claim_matches(stage, claim, now):
                 session.rollback()
                 return False
@@ -444,7 +579,7 @@ class WorkerStore:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(row, claim, now):
                 session.rollback()
                 return False
@@ -472,7 +607,7 @@ class WorkerStore:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(row, claim, now):
                 session.rollback()
                 return False
@@ -504,6 +639,12 @@ class WorkerStore:
             row.lease_expires_at = None
             row.heartbeat_at = None
             self._release_resources(session, claim)
+            if claim.stage == "notes":
+                checkpoint = session.get(
+                    NotesGraphCheckpointRecord, claim.stage_run_id
+                )
+                if checkpoint is not None:
+                    session.delete(checkpoint)
             self._recalculate_item_and_task(session, row.item)
             session.commit()
             return True
@@ -520,7 +661,7 @@ class WorkerStore:
             raise TypeError("deferred stage result is required")
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(row, claim, now):
                 session.rollback()
                 return False
@@ -552,12 +693,13 @@ class WorkerStore:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(row, claim, now):
                 session.rollback()
                 return False
             assert row is not None
             row.status = "queued"
+            row.dispatched_at = None
             row.lease_owner = None
             row.lease_expires_at = None
             row.heartbeat_at = None
@@ -576,7 +718,7 @@ class WorkerStore:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(row, claim, now):
                 session.rollback()
                 return False
@@ -599,7 +741,7 @@ class WorkerStore:
         now = _utc(now)
         with Session(self.engine) as session:
             self._begin_immediate(session)
-            row = session.get(StageRunRecord, claim.stage_run_id)
+            row = session.get(StageRunRecord, claim.stage_run_id, with_for_update=True)
             if not self._claim_matches(
                 row,
                 claim,
@@ -661,6 +803,7 @@ class WorkerStore:
                     or row.item.task.status in {"cancel_requested", "canceled"}
                 )
                 row.status = "canceled" if canceled else "queued"
+                row.dispatched_at = None
                 row.finished_at = now if canceled else None
                 row.lease_owner = None
                 row.lease_expires_at = None

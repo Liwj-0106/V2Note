@@ -1,7 +1,7 @@
-# VtNote 技术方案与决策
+# V2Note 技术方案与决策
 
 状态：当前实现基线
-校准日期：2026-08-30
+校准日期：2026-09-24
 
 ## 总体架构
 
@@ -11,10 +11,12 @@ Browser / React SPA
         ▼
 FastAPI API ──────────────── Windows Credential Manager
         │                           │ credential_ref
-        │ SQLite WAL + durable files│
+        │ MySQL + durable files      │
         ▼                           ▼
-     SQLite  ◀────────────── Independent Worker
-        │                       │ source / transcribe / notes
+      MySQL ── Kafka stage queue ─ Independent Worker
+        │                              │ source / transcribe / notes
+        ├── Redis source idempotency   ├─ FFmpeg / platform adapters / ASR
+        │                              └─ LangGraph notes flow with cursor state
         │                       ├─ controlled yt-dlp + pinned HTTPS
         │                       ├─ FFmpeg / FFprobe
         │                       ├─ Tencent recording ASR / private COS
@@ -25,7 +27,7 @@ FastAPI API ──────────────── Windows Credential 
 Data root + Cache root
 ```
 
-`src/vtnote/launcher.py` 的 supervisor 启动 API 和 Worker 两个子进程。Worker 内还有模型安装与 maintenance 循环。API 不执行长任务；两个进程只通过 SQLite、规范文件和登记后的 runtime 资产交接。
+`src/vtnote/launcher.py` 的 supervisor 启动 API 和 Worker 两个子进程。Worker 内还有模型安装与 maintenance 循环。API 不执行长任务：本机模式通过 SQLite 交接，服务端模式以 MySQL 阶段状态和 Kafka 阶段消息交接；Redis 为服务端来源幂等的快速映射层。
 
 ### 代码组织与依赖方向
 
@@ -60,8 +62,10 @@ launcher.py / api.py                 composition root
 |---|---|---|
 | UI | React 19 + TypeScript + Vite + GSAP 3.15.0 | 轻量本地 SPA、类型化 API；GSAP 只承载可中断的处理状态动效 |
 | API | FastAPI + Uvicorn + Pydantic 2 | 明确请求合同、统一错误、上传流和本地 HTTP 服务 |
-| 持久化 | SQLAlchemy 2 + SQLite WAL | 单用户本机部署无需独立数据库，同时支持事务、索引、租约和恢复 |
-| 任务执行 | 独立 Worker + DB lease | API 重启不丢任务；避免进程内队列和 `BackgroundTasks` 的不耐久性 |
+| 持久化 | SQLAlchemy 2 + MySQL（服务端）/ SQLite WAL（本机） | 阶段状态、租约和恢复游标可持久化；本机模式无需单独部署数据库 |
+| 任务执行 | Kafka + 独立 Worker + MySQL 阶段状态 | API 只创建任务；Worker 消费阶段消息，MySQL 状态支持重复投递保护和阶段恢复 |
+| 来源幂等 | Redis + MySQL 映射 | Redis 命中重复来源，MySQL 保存来源配置指纹与既有任务映射 |
+| 总结编排 | LangGraph + MySQL 游标检查点 | 按转写分块推进总结状态，重启后从已完成的分块继续 |
 | 媒体 | FFmpeg/FFprobe | 统一探测、抽音频、转码、规范采样率和音频导出 |
 | 平台 | yt-dlp adapter + 自有安全传输 | 隔离易变平台逻辑，固定版本，限制 URL/DNS/重定向/运行时 |
 | 云 ASR | 腾讯云录音文件识别 | 异步 TaskId 可持久查询；支持内联和私有 COS 两条路径 |
@@ -77,7 +81,7 @@ launcher.py / api.py                 composition root
 
 1. API 校验来源和选项；B 站合集/列表先通过有界适配器分页枚举，用户选择后在一个事务中创建多个独立任务。每个任务再冻结 ASR/AI profile 修订、授权指纹和模型参数。
 2. 根据 `output_type` 创建最小阶段集：`audio`、`transcript` 或 `notes`。
-3. Worker 以 `BEGIN IMMEDIATE` 和依赖检查领取下一阶段，写入 lease/heartbeat。
+3. 本机 Worker 以 SQLite 写事务和依赖检查领取下一阶段；服务端 Worker 消费 Kafka 阶段消息，并通过 MySQL 行锁、依赖检查和 lease/heartbeat 领取。
 4. 来源阶段优先平台字幕；否则发布受控媒体资产。
 5. 字幕阶段通过云或本地 ASR 发布不可变 `transcript.json`。
 6. 笔记/翻译只读取 transcript 派生新成果。
@@ -139,7 +143,7 @@ Data/
 └── models/large-v3-turbo/<revision>/
 ```
 
-SQLite 保存：
+数据库保存（本机模式为 SQLite，服务端模式为 MySQL）：
 
 - tasks/items/stage runs、阶段依赖、attempt、lease、heartbeat、进度和安全错误；
 - 输入类型和 locator、标题、生成选项和不可变 pipeline snapshot；
@@ -147,12 +151,13 @@ SQLite 保存：
 - runtime 资产相对路径、角色、大小、SHA-256、active/trash 状态和清理审计；
 - provider 连接/profile 元数据、测试状态、修订和授权指纹；
 - 默认设置、模型安装状态、凭据清理补偿队列；
-- 内容库合集、标签、时间戳摘录和 FTS5 派生搜索文档；
+- 内容库合集、标签和时间戳摘录；本机模式使用 FTS5 派生搜索文档，服务端模式使用有界 `LIKE` 查询；
+- 服务端来源配置指纹与任务映射、LangGraph 总结游标及节点检查点；
 - DPAPI 保护的自定义提示词 envelope。
 
-Data 当前没有任务级自动过期。内容库支持终态任务单条/批量永久删除：先以 SQLite `BEGIN IMMEDIATE` 锁定并完整校验批次，再把对应 Data/Cache 项目目录原子移动到同盘内部 staging，数据库提交失败时恢复文件，提交成功后清除 staging。处理中、仍持有阶段租约，或云 submission/COS 清理未完成的任务拒绝删除；批量请求全有或全无。用户本地原始文件不属于删除范围。停止应用后备份整个 Data；不要在 WAL 活动时只复制 `vtnote.db`。
+Data 当前没有任务级自动过期。内容库支持终态任务单条/批量永久删除：本机模式先以 SQLite `BEGIN IMMEDIATE` 锁定并完整校验批次；服务端模式使用 MySQL 事务和行锁。两种模式都会把对应 Data/Cache 项目目录原子移动到同盘内部 staging，提交失败时恢复文件，提交成功后清除 staging。处理中、仍持有阶段租约，或云 submission/COS 清理未完成的任务拒绝删除；批量请求全有或全无。用户本地原始文件不属于删除范围。本机模式停止应用后备份整个 Data；不要在 WAL 活动时只复制 `vtnote.db`。
 
-全文检索使用 SQLite FTS5 `trigram`，索引标题、来源、逐段字幕、总结和摘录；短查询回退到有界 `LIKE`。索引按 item 产物时间与摘录修订生成指纹并惰性重建，不是备份来源。导出目录路径存于本地 `default_settings`；默认指向仓库 `exports/`，用户可通过原生目录选择器改为已有绝对目录。导出以不覆盖策略生成文件，自定义目录不进入缓存清理或任务删除范围。
+全文检索在 SQLite 模式使用 FTS5 `trigram`，服务端 MySQL 使用有界 `LIKE` 回退，索引标题、来源、逐段字幕、总结和摘录；索引按 item 产物时间与摘录修订生成指纹并惰性重建，不是备份来源。导出目录路径存于 `default_settings`；默认指向仓库 `exports/`，用户可通过原生目录选择器改为已有绝对目录。导出以不覆盖策略生成文件，自定义目录不进入缓存清理或任务删除范围。
 
 ### Cache：媒体与运行资产
 
@@ -187,24 +192,30 @@ Cache/
 
 ### 密钥与浏览器数据
 
-- 腾讯 SecretId/SecretKey、TokenHub/Bailian API Key：Windows Credential Manager 的 `VtNote` service；数据库只存 `connection:<uuid>`。
+- 腾讯 SecretId/SecretKey、TokenHub/Bailian API Key：Windows Credential Manager 的 `VtNote` service；数据库只存 `connection:<uuid>`。该 service 名称作为已有凭据的兼容性标识保留。
 - 自定义提示词：当前用户 DPAPI 密文，位于 defaults/task snapshot。
 - 总结提示词分为应用固定的 system 合同和用户可配置的 `task_instruction`；字幕与 map/reduce 中间节点只是不可信证据。用户模板可以改变重点和组织，不能取消严格 JSON schema、输出语言、引用血统校验或原文事实边界。
 - 浏览器 localStorage：侧栏折叠状态和 `vtnote.preferences.v1`；不保存任务、字幕、密钥或本地路径。
 
 ## 关键技术决策
 
-### ADR-001：本机回环、同源部署
+### ADR-001：本机回环、同源部署（本机模式）
 
-决定：API 固定 `127.0.0.1`，FastAPI 同源提供构建后的 SPA；启用 Host、Origin、CSRF 检查。
+决定：本机模式 API 固定 `127.0.0.1`，FastAPI 同源提供构建后的 SPA；启用 Host、Origin、CSRF 检查。服务端模式复用同源应用边界，但部署到服务器前仍需配置公网入口的身份认证、TLS 和网络隔离。
 
-理由：当前产品是单用户本机工具，不需要公网身份、CORS 或反向代理。若未来云化，需要单独设计认证、多租户、PostgreSQL/对象存储和数据保留，不能把旧候选云文档当成已实现方案。
+理由：保留易部署的本机使用方式，同时提供 MySQL/Kafka/Redis 服务端运行组合。当前服务端配置面向受控环境，不包含公网认证、多租户或生产级备份策略。
 
-### ADR-002：SQLite WAL + 独立 Worker
+### ADR-002：SQLite WAL + 独立 Worker（本机模式）
 
 决定：任务、阶段和外部提交都持久化；Worker 用租约和心跳领取，API 不运行长任务。
 
-理由：本机部署简单，同时提供崩溃恢复、并发互斥和付费请求防重。任务规模超过单机、需要多 Worker 时再评估 PostgreSQL。
+理由：本机部署简单，同时提供崩溃恢复、并发互斥和付费请求防重。需要服务端任务队列时使用 MySQL/Kafka/Redis 组合，保留 SQLite 作为桌面兼容模式。
+
+### ADR-005：MySQL + Kafka + Redis + LangGraph（服务端模式）
+
+决定：MySQL 是任务阶段状态与总结游标的持久化来源；Worker 通过 Kafka 接收可重复投递的阶段 ID，并以 MySQL 租约阻止重复执行；Redis 缓存来源与配置指纹映射，MySQL 保存权威映射；LangGraph 按转写分块推进总结，逐块保存游标和已生成节点。
+
+理由：API 与模型处理 Worker 解耦，重复链接能够复用已有任务，长视频总结可从已完成的转写块继续。本地桌面模式沿用 SQLite，不要求部署基础设施。
 
 ### ADR-003：规范文本长期保存，媒体登记为 runtime 资产
 
@@ -232,9 +243,9 @@ Cache/
 
 ### ADR-007：参考项目采用以效果和边界为门禁
 
-决定：DownKyi/vivo 中的实现或组件不因“开源”自动采用，也不因 GPL 自动排除。个人内部使用可做实验；进入 VtNote 主路径前必须以相同授权样本证明字幕成功率、耗时、失败恢复或资源占用的净收益，并保持当前网络和密钥边界。
+决定：DownKyi/vivo 中的实现或组件不因“开源”自动采用，也不因 GPL 自动排除。个人内部使用可做实验；进入 V2Note 主路径前必须以相同授权样本证明字幕成功率、耗时、失败恢复或资源占用的净收益，并保持当前网络和密钥边界。
 
-当前可借鉴：独立内容选择、阶段进度、外部任务恢复、字幕语言轨枚举、结构化并发/取消和流式网络处理。B 站合集/列表已参考本地 DownKyi 快照中的 season/series 分页思路，以 VtNote 自有 typed adapter 和受控 HTTPS 传输重新实现；没有复制其 UI、下载器或持久化代码。
+当前可借鉴：独立内容选择、阶段进度、外部任务恢复、字幕语言轨枚举、结构化并发/取消和流式网络处理。B 站合集/列表已参考本地 DownKyi 快照中的 season/series 分页思路，以 V2Note 自有 typed adapter 和受控 HTTPS 传输重新实现；没有复制其 UI、下载器或持久化代码。
 
 当前不引入 aria2/DownKyi FFmpeg 的原因不是许可证页面尚未完成，而是本次故障发生在 ASR 大小判断，且单音频下载尚无实测收益。若后续采用 aria2，必须只监听 loopback、使用随机 `rpc-secret`、保持证书校验且禁止任意 Origin；私有 B 站接口只能放在 typed adapter 后并保留 yt-dlp 后备。GPL 代码如被复制，必须记录来源并在任何对外分发前重新审查整个组合。详见 [参考项目](reference-projects.md#downkyi-161-本地快照审计)。
 

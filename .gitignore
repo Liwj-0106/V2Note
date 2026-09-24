@@ -20,6 +20,7 @@ cookies.txt
 *.db-shm
 *.db-wal
 VtNote-data/
+V2Note-data/
 .vtnote/
 # User-selected default export destination.
 exports/

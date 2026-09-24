@@ -1,4 +1,4 @@
-# VtNote 调研来源
+# V2Note 调研来源
 
 校准日期：2026-08-30
 
@@ -10,7 +10,7 @@
 4. 不使用不同厂商营销准确率作横向排名；质量结论需要相同授权样本。
 5. 本地无 Git 快照只能证明所读文件，不能证明上游 commit 或完整可复现源码。
 
-## VtNote 当前实现证据
+## V2Note 当前实现证据
 
 | 主题 | 本地证据 |
 |---|---|
@@ -32,9 +32,9 @@
 |---|---|---|
 | [Tencent CreateRecTask](https://www.tencentcloud.com/document/product/1118/66925) | 录音文件识别提交、Base64/URL 与异步任务 | 采用异步任务边界；具体模型、大小和地域仍由本地固定合同与真实账户验证 |
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | CTranslate2 Whisper 推理、GPU/CPU/量化选项和 MIT 许可 | 保留固定 GPU profile 和用户显式开启的 CPU fallback；不在任务中下载模型 |
-| [SenseVoice Small](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) | 非自回归多语种 ASR 模型卡与自定义模型许可入口 | 采用固定 INT8 ONNX 转换资产；上游性能数字不替代 VtNote 本机同样本验证 |
+| [SenseVoice Small](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) | 非自回归多语种 ASR 模型卡与自定义模型许可入口 | 采用固定 INT8 ONNX 转换资产；上游性能数字不替代 V2Note 本机同样本验证 |
 | [sherpa-onnx SenseVoice](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) / [Python API](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html) | SenseVoice 离线识别配置、模型文件和 Python 接口 | 固定 `sherpa-onnx==1.13.6`，使用 CPU provider 并记录模型哈希 |
-| [sherpa-onnx Silero VAD](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html) / [字幕示例](https://github.com/k2-fsa/sherpa-onnx/blob/master/python-api-examples/generate-subtitles.py) | VAD 配置与长音频分段识别参考 | 固定 VAD 资产；结果仍发布到 VtNote 统一字幕结构，不引入多人识别 |
+| [sherpa-onnx Silero VAD](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html) / [字幕示例](https://github.com/k2-fsa/sherpa-onnx/blob/master/python-api-examples/generate-subtitles.py) | VAD 配置与长音频分段识别参考 | 固定 VAD 资产；结果仍发布到 V2Note 统一字幕结构，不引入多人识别 |
 | [Refero Styles](https://styles.refero.design/) | 视觉风格样本 | 首屏采用暖中性、细边框和单一强调色；不复制营销页面 |
 | [Vibe Interaction Glossary](https://vibe-hub.org/) | 前端交互动效术语与可视示例 | 用于统一状态反馈描述，不把效果本身变成功能 |
 | [GSAP](https://gsap.com/) / [Showcase](https://gsap.com/showcase/) | 动效实现 API 与案例 | 固定 `gsap@3.15.0` 的 npm 依赖；仅用于功能状态且支持减少动态效果 |
@@ -61,7 +61,7 @@
 | 存储 | `DownKyi.Core\Storage\`、发行目录的 `Storage/Config/aria/logs` |
 | About 第三方表 | `DownKyi\Views\Settings\ViewAbout.xaml` |
 
-本地发行目录含下载数据库、设置、日志、缓存和登录相关文件，只进行结构/哈希审阅，不读取或复制用户凭据内容，也不纳入 VtNote 仓库。
+本地发行目录含下载数据库、设置、日志、缓存和登录相关文件，只进行结构/哈希审阅，不读取或复制用户凭据内容，也不纳入 V2Note 仓库。
 
 ## 刷新触发器
 

@@ -65,6 +65,7 @@ from vtnote.model_assets import (
 )
 from vtnote.notes import DEFAULT_NOTES_PROMPT
 from vtnote.paths import StoragePaths, UnsafePathError
+from vtnote.source_idempotency import RedisSourceResultCache
 from vtnote.platform_sources import build_default_platform_registry
 from vtnote.project_resources import bundled_asset, frontend_dist_path
 from vtnote.provider_chat import (
@@ -141,6 +142,11 @@ def create_app(
     directory_picker: DirectoryPicker | None = None,
 ) -> FastAPI:
     selected_settings = settings or Settings()
+    source_result_cache = (
+        RedisSourceResultCache(selected_settings.redis_url)
+        if selected_settings.redis_url is not None
+        else None
+    )
     paths = StoragePaths.from_settings(selected_settings)
     model_paths = StoragePaths.managed_assets_from_settings(selected_settings)
     selected_protector = (
@@ -150,6 +156,7 @@ def create_app(
     selected_engine = engine or initialize_database(
         paths.database,
         sensitive_text_protector=selected_protector,
+        database_url=selected_settings.database_url,
     )
     if engine is not None:
         migrate_sensitive_text(selected_engine, selected_protector)
@@ -227,12 +234,17 @@ def create_app(
 
     docs_enabled = selected_settings.enable_dev_docs
     app = FastAPI(
-        title="VtNote",
+        title="V2Note",
         version="0.1.0",
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
         openapi_url="/openapi.json" if docs_enabled else None,
     )
+    if source_result_cache is not None:
+        @app.on_event("shutdown")
+        def close_source_result_cache() -> None:
+            source_result_cache.close()
+
     logger = logging.getLogger("vtnote.api")
 
     @app.middleware("http")
@@ -385,6 +397,7 @@ def create_app(
             paths,
             source_policy,
             local_source_validator=selected_local_sources,
+            source_result_cache=source_result_cache,
         )
         return session, configuration, tasks
 

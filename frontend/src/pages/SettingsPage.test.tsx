@@ -14,8 +14,8 @@ describe("SettingsPage", () => {
     vi.spyOn(api, "request").mockImplementation(async (path) => {
       if (path === "/api/export-settings") {
         return {
-          directory: "D:\\Workspace\\Project\\VtNote\\exports",
-          default_directory: "D:\\Workspace\\Project\\VtNote\\exports",
+          directory: "D:\\Workspace\\Project\\V2Note\\exports",
+          default_directory: "D:\\Workspace\\Project\\V2Note\\exports",
           is_default: true,
         };
       }
@@ -97,8 +97,8 @@ describe("SettingsPage", () => {
     const request = vi.spyOn(api, "request").mockImplementation(async (path, options) => {
       if (path === "/api/export-settings" && !options?.method) {
         return {
-          directory: "D:\\Workspace\\Project\\VtNote\\exports",
-          default_directory: "D:\\Workspace\\Project\\VtNote\\exports",
+          directory: "D:\\Workspace\\Project\\V2Note\\exports",
+          default_directory: "D:\\Workspace\\Project\\V2Note\\exports",
           is_default: true,
         };
       }
@@ -108,7 +108,7 @@ describe("SettingsPage", () => {
       if (path === "/api/export-settings" && options?.method === "PATCH") {
         return {
           directory: "D:\\My Exports",
-          default_directory: "D:\\Workspace\\Project\\VtNote\\exports",
+          default_directory: "D:\\Workspace\\Project\\V2Note\\exports",
           is_default: false,
         };
       }

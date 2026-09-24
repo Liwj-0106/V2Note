@@ -382,7 +382,7 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
     });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    const safeTitle = (item.title ?? "VtNote-总结")
+    const safeTitle = (item.title ?? "V2Note-总结")
       .replace(/[\\/:*?"<>|]+/gu, "-")
       .slice(0, 72);
     anchor.href = url;

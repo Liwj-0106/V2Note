@@ -1,4 +1,4 @@
-"""Small executable guardrails for VtNote's incremental module boundaries."""
+"""Small executable guardrails for V2Note's incremental module boundaries."""
 
 from __future__ import annotations
 

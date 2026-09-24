@@ -21,7 +21,7 @@ from vtnote.worker_store import WorkerStore
 
 BASE_URL = "http://127.0.0.1:8766"
 NOW = datetime(2026, 7, 30, 8, 0, tzinfo=timezone.utc)
-SRT = b"1\n00:00:00,000 --> 00:00:01,200\nVtNote offline\n"
+SRT = b"1\n00:00:00,000 --> 00:00:01,200\nV2Note offline\n"
 
 
 class _Resolver:
@@ -100,12 +100,12 @@ def test_uploaded_subtitle_reaches_immutable_transcript_and_regenerated_export(
 
         transcript = client.get(f"/api/items/{item_id}/transcript")
         assert transcript.status_code == 200
-        assert transcript.json()["segments"][0]["text"] == "VtNote offline"
+        assert transcript.json()["segments"][0]["text"] == "V2Note offline"
         exported = client.get(
             f"/api/items/{item_id}/export?variant=original&format=markdown"
         )
         assert exported.status_code == 200
-        assert "VtNote offline" in exported.text
+        assert "V2Note offline" in exported.text
         assert paths.transcript(item_id).is_file()
         assert paths.source_original(item_id, "srt").read_bytes() == SRT
 

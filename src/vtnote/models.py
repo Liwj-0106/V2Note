@@ -15,6 +15,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
 
+_NAME_STRING = String(128, collation="NOCASE").with_variant(
+    String(128, collation="utf8mb4_unicode_ci"), "mysql"
+)
+
+
 def _uuid() -> str:
     return str(uuid.uuid4())
 
@@ -105,6 +110,20 @@ class TaskRecord(Base):
     )
 
 
+class SourceResultRecord(Base):
+    """Durable idempotency mapping from an input/config fingerprint to a task."""
+
+    __tablename__ = "source_result_cache"
+
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), default=_utcnow, nullable=False
+    )
+
+
 class ItemRecord(Base):
     __tablename__ = "items"
     __table_args__ = (UniqueConstraint("task_id", "position", name="uq_items_task_position"),)
@@ -176,12 +195,29 @@ class StageRunRecord(Base):
     recovered_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    dispatched_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
     item: Mapped[ItemRecord] = relationship(back_populates="stage_runs")
+
+
+class NotesGraphCheckpointRecord(Base):
+    """Durable map-cursor and partial notes state for one notes attempt."""
+
+    __tablename__ = "notes_graph_checkpoints"
+
+    stage_run_id: Mapped[str] = mapped_column(
+        ForeignKey("stage_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    cursor: Mapped[int] = mapped_column(Integer, nullable=False)
+    total: Mapped[int] = mapped_column(Integer, nullable=False)
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
 
 
 class CloudSubmissionRecord(Base):
@@ -362,12 +398,12 @@ class ProviderConnectionRecord(Base):
             "name",
             unique=True,
             sqlite_where=text("archived_at IS NULL"),
-        ),
+        ).ddl_if(dialect="sqlite"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(
-        String(128, collation="NOCASE"), nullable=False
+        _NAME_STRING, nullable=False
     )
     protocol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     base_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -400,12 +436,12 @@ class ProcessorProfileRecord(Base):
             "name",
             unique=True,
             sqlite_where=text("archived_at IS NULL"),
-        ),
+        ).ddl_if(dialect="sqlite"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(
-        String(128, collation="NOCASE"), nullable=False
+        _NAME_STRING, nullable=False
     )
     purpose: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     connection_id: Mapped[str] = mapped_column(
@@ -500,7 +536,7 @@ class LibraryCollectionRecord(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(
-        String(128, collation="NOCASE"), nullable=False, unique=True
+        _NAME_STRING, nullable=False, unique=True
     )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=_utcnow, nullable=False
@@ -529,7 +565,7 @@ class LibraryTagRecord(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(
-        String(128, collation="NOCASE"), nullable=False, unique=True
+        _NAME_STRING, nullable=False, unique=True
     )
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=_utcnow, nullable=False

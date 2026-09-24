@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Connection, Engine, create_engine, event, select
+from sqlalchemy import Connection, Engine, create_engine, event, inspect, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
@@ -49,6 +49,7 @@ _ADDITIVE_COLUMNS = {
         "provider_status_code": "VARCHAR(128)",
         "retry_override_json": "JSON",
         "recovered_count": "INTEGER NOT NULL DEFAULT 0",
+        "dispatched_at": "DATETIME",
     },
     "default_settings": {
         "notes_custom_prompt_envelope_json": "JSON",
@@ -97,16 +98,16 @@ def _apply_additive_schema_upgrades(connection: Connection) -> None:
     added_columns: set[tuple[str, str]] = set()
     for table_name, additions in _ADDITIVE_COLUMNS.items():
         columns = {
-            str(row[1])
-            for row in connection.exec_driver_sql(
-                f'PRAGMA table_info("{table_name}")'
-            )
+            str(column["name"])
+            for column in inspect(connection).get_columns(table_name)
         }
         for column_name, declaration in additions.items():
             if column_name not in columns:
+                preparer = connection.dialect.identifier_preparer
+                table = preparer.quote(table_name)
+                column = preparer.quote(column_name)
                 connection.exec_driver_sql(
-                    f'ALTER TABLE "{table_name}" '
-                    f'ADD COLUMN "{column_name}" {declaration}'
+                    f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
                 )
                 added_columns.add((table_name, column_name))
     if ("tasks", "terminal_reason_code") in added_columns:
@@ -119,18 +120,21 @@ def _apply_additive_schema_upgrades(connection: Connection) -> None:
 
 def _initialize_schema(engine: Engine) -> None:
     with engine.connect() as connection:
-        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
         try:
             Base.metadata.create_all(connection)
             _apply_additive_schema_upgrades(connection)
-            connection.exec_driver_sql(
-                """CREATE VIRTUAL TABLE IF NOT EXISTS library_search_fts
-                USING fts5(document_id UNINDEXED, content, tokenize='trigram')"""
-            )
+            if connection.dialect.name == "sqlite":
+                connection.exec_driver_sql(
+                    """CREATE VIRTUAL TABLE IF NOT EXISTS library_search_fts
+                    USING fts5(document_id UNINDEXED, content, tokenize='trigram')"""
+                )
         except Exception:
             connection.rollback()
             raise
-        connection.commit()
+        if connection.in_transaction():
+            connection.commit()
 
 
 def _migrate_default_local_whisper_device(engine: Engine) -> None:
@@ -417,21 +421,31 @@ def initialize_database(
     database_path: Path,
     *,
     sensitive_text_protector: SensitiveTextProtector | None = None,
+    database_url: str | None = None,
 ) -> Engine:
-    """Create a file-backed SQLite engine, enable durability pragmas, and create tables."""
+    """Create a local SQLite or server MySQL engine and initialize its schema."""
 
     path = Path(database_path)
-    if not path.is_absolute():
-        raise ValueError("database path must be absolute")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(
-        URL.create("sqlite+pysqlite", database=str(path)),
-        connect_args={"check_same_thread": False, "timeout": 5},
-    )
-    event.listen(engine, "connect", _configure_sqlite)
+    if database_url is None:
+        if not path.is_absolute():
+            raise ValueError("database path must be absolute")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        engine = create_engine(
+            URL.create("sqlite+pysqlite", database=str(path)),
+            connect_args={"check_same_thread": False, "timeout": 5},
+        )
+        event.listen(engine, "connect", _configure_sqlite)
+    else:
+        engine = create_engine(
+            database_url,
+            isolation_level="READ COMMITTED",
+            pool_pre_ping=True,
+            pool_recycle=1800,
+        )
     try:
         with _BOOTSTRAP_LOCK:
-            _initialize_wal(engine)
+            if engine.dialect.name == "sqlite":
+                _initialize_wal(engine)
             _initialize_schema(engine)
             migrate_sensitive_text(engine, sensitive_text_protector)
             _migrate_legacy_cloud_provider(engine)

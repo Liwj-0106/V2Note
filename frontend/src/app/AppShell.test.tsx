@@ -99,7 +99,7 @@ describe("AppShell", () => {
     const openButton = screen.getByRole("button", { name: "打开导航" });
     const drawer = document.getElementById("primary-sidebar");
     expect(drawer).toHaveAttribute("inert");
-    expect(screen.queryByRole("link", { name: "VtNote 首页" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "V2Note 首页" })).toBeNull();
 
     await userEvent.click(openButton);
     expect(drawer).toHaveAttribute(
@@ -107,7 +107,7 @@ describe("AppShell", () => {
       "true",
     );
     expect(drawer).not.toHaveAttribute("inert");
-    expect(within(drawer!).getByRole("link", { name: "VtNote 首页" })).toHaveAttribute(
+    expect(within(drawer!).getByRole("link", { name: "V2Note 首页" })).toHaveAttribute(
       "href",
       "/",
     );

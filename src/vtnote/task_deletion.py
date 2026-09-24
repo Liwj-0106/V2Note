@@ -21,6 +21,7 @@ from vtnote.models import (
     TaskRecord,
 )
 from vtnote.paths import StoragePaths
+from vtnote.persistence import begin_write_transaction
 from vtnote.pipeline import TERMINAL_STATUSES
 
 _REMOTE_DELETE_BLOCKING_STATES = frozenset(
@@ -54,7 +55,7 @@ class TaskDeletionService:
         if self.session.in_transaction():
             self.session.rollback()
         try:
-            self.session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            begin_write_transaction(self.session.connection())
         except OperationalError as error:
             self.session.rollback()
             raise TaskDeletionError("task_delete_database_busy") from error

@@ -1,4 +1,4 @@
-"""Local-first library organization, excerpts, and full-text discovery."""
+"""Library organization, excerpts, and full-text discovery."""
 
 from __future__ import annotations
 
@@ -98,11 +98,11 @@ class LibraryService:
     def metadata(self) -> dict[str, Any]:
         collections = self.session.scalars(
             select(LibraryCollectionRecord).order_by(
-                LibraryCollectionRecord.name.collate("NOCASE")
+                func.lower(LibraryCollectionRecord.name)
             )
         ).all()
         tags = self.session.scalars(
-            select(LibraryTagRecord).order_by(LibraryTagRecord.name.collate("NOCASE"))
+            select(LibraryTagRecord).order_by(func.lower(LibraryTagRecord.name))
         ).all()
         visible_task_filter = (
             (TaskRecord.terminal_reason_code.is_(None))
@@ -446,7 +446,7 @@ class LibraryService:
             )
         self.session.add_all(documents)
         self.session.flush()
-        if documents:
+        if documents and self.session.get_bind().dialect.name == "sqlite":
             self.session.execute(
                 text(
                     "INSERT INTO library_search_fts(document_id, content) "
@@ -463,12 +463,13 @@ class LibraryService:
             state.indexed_at = _utcnow()
 
     def refresh_index(self) -> None:
-        self.session.execute(
-            text(
-                "DELETE FROM library_search_fts WHERE document_id NOT IN "
-                "(SELECT id FROM library_search_documents)"
+        if self.session.get_bind().dialect.name == "sqlite":
+            self.session.execute(
+                text(
+                    "DELETE FROM library_search_fts WHERE document_id NOT IN "
+                    "(SELECT id FROM library_search_documents)"
+                )
             )
-        )
         items = self.session.scalars(
             select(ItemRecord)
             .join(TaskRecord)
@@ -567,7 +568,10 @@ class LibraryService:
         matches: dict[str, dict[str, Any]] = {}
         if normalized_query and candidate_ids:
             rows = None
-            if len(normalized_query) >= 3:
+            if (
+                self.session.get_bind().dialect.name == "sqlite"
+                and len(normalized_query) >= 3
+            ):
                 try:
                     phrase = '"' + normalized_query.replace('"', '""') + '"'
                     rows = self.session.execute(

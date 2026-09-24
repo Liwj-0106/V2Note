@@ -621,6 +621,44 @@ class NotesStageHandler:
             task_id=selected.task_id,
             cancel_check=lambda: _cancellation_checkpoint(context),
         )
+
+        def save_graph_progress(
+            cursor: int,
+            total: int,
+            state: dict[str, object],
+        ) -> None:
+            context.checkpoint()
+            saved = context.store.save_notes_graph_checkpoint(
+                context.claim,
+                cursor=cursor,
+                total=total,
+                state=state,
+                now=context.clock(),
+            )
+            if not saved:
+                raise StageExecutionError("notes_checkpoint_lost")
+            context.store.update_progress(
+                context.claim,
+                {
+                    "current": cursor,
+                    "total": total,
+                    "unit": "chunks",
+                    "message_code": "summarizing_chunks",
+                },
+                now=context.clock(),
+            )
+
+        saved_graph_checkpoint = context.store.load_notes_graph_checkpoint(
+            context.claim.stage_run_id
+        )
+        checkpoint_state = (
+            {
+                "cursor": saved_graph_checkpoint["cursor"],
+                **saved_graph_checkpoint["state"],
+            }
+            if saved_graph_checkpoint is not None
+            else None
+        )
         try:
             generator.generate_and_write(
                 transcript,
@@ -633,6 +671,8 @@ class NotesStageHandler:
                 paths=self.paths,
                 item_id=context.claim.item_id,
                 note_id=context.claim.stage_run_id,
+                checkpoint_state=checkpoint_state,
+                progress_callback=save_graph_progress,
             )
         except (ChatError, NoteError) as error:
             _raise_ai_error(error)

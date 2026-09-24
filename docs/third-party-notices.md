@@ -53,7 +53,7 @@ Deno、CUDA/cuBLAS/cuDNN、模型权重和 FFmpeg 是否构成发行内容，必
 ## DownKyi 参考项目
 
 本项目当前没有复制或打包 DownKyi、aria2、DownKyi 的 FFmpeg、Prism、WebPSharp 等
-组件；它们是本地调研对象，不属于 VtNote 第三方依赖。内部效果实验与正式合并/分发
+组件；它们是本地调研对象，不属于 V2Note 第三方依赖。内部效果实验与正式合并/分发
 分开管理；若未来复制 GPL 代码或捆绑 GPL 二进制，必须把来源、修改和对应源码义务
 纳入发布门禁。详见[参考项目调研](reference-projects.md)。
 

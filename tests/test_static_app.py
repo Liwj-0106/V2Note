@@ -25,7 +25,7 @@ def test_built_spa_is_served_without_capturing_api_or_mutation_routes(
     assets = dist / "assets"
     assets.mkdir(parents=True)
     (dist / "index.html").write_text(
-        "<!doctype html><title>VtNote UI</title>",
+        "<!doctype html><title>V2Note UI</title>",
         encoding="utf-8",
     )
     (assets / "app.js").write_text("window.VTNOTE = true;", encoding="utf-8")
@@ -44,11 +44,11 @@ def test_built_spa_is_served_without_capturing_api_or_mutation_routes(
     )
 
     with TestClient(app, base_url=BASE_URL) as client:
-        assert "VtNote UI" in client.get("/").text
-        assert "VtNote UI" in client.get("/tasks").text
-        assert "VtNote UI" in client.get("/settings/export").text
-        assert "VtNote UI" in client.get("/settings/models").text
-        assert "VtNote UI" in client.get(
+        assert "V2Note UI" in client.get("/").text
+        assert "V2Note UI" in client.get("/tasks").text
+        assert "V2Note UI" in client.get("/settings/export").text
+        assert "V2Note UI" in client.get("/settings/models").text
+        assert "V2Note UI" in client.get(
             "/tasks/94f344da-aa8d-481c-8d91-e6b94efc6e67"
         ).text
         assert client.get("/assets/app.js").text == "window.VTNOTE = true;"

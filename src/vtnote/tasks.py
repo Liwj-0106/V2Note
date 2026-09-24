@@ -7,6 +7,8 @@ writes. Direct mutation of diagnostic ORM fields is internal and unsupported.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -39,10 +41,12 @@ from vtnote.exports import ExportFormat, render_export_from_json
 from vtnote.models import (
     ItemRecord,
     RuntimeAssetRecord,
+    SourceResultRecord,
     StageRunRecord,
     TaskRecord,
 )
 from vtnote.paths import StoragePaths
+from vtnote.persistence import begin_write_transaction
 from vtnote.result_artifacts import parse_note_metadata, read_result_artifact
 from vtnote.retry_policy import bounded_retry_override, is_sqlite_retry_conflict
 from vtnote.stage_models import allowed_stage_models
@@ -72,6 +76,7 @@ from vtnote.sensitive_text import (
     task_prompt_purpose,
     validate_protected_text_envelope,
 )
+from vtnote.source_idempotency import SourceResultCache
 
 
 _PROFILE_TEST_SAMPLE_REASON = "profile_test_sample"
@@ -104,12 +109,14 @@ class TaskService:
         paths: StoragePaths,
         source_urls: SourceUrlPolicy,
         local_source_validator: LocalSourceValidator | None = None,
+        source_result_cache: SourceResultCache | None = None,
     ) -> None:
         self.session = session
         self.configuration = configuration
         self.paths = paths
         self.source_urls = source_urls
         self.local_source_validator = local_source_validator
+        self.source_result_cache = source_result_cache
 
     _bounded_retry_override = staticmethod(bounded_retry_override)
     _is_sqlite_retry_conflict = staticmethod(is_sqlite_retry_conflict)
@@ -120,12 +127,12 @@ class TaskService:
         if self.session.in_transaction():
             connection = self.session.connection()
             driver_connection = connection.connection.driver_connection
-            if driver_connection.in_transaction:
+            if connection.dialect.name == "sqlite" and driver_connection.in_transaction:
                 raise InvalidTaskOperation("stage retry requires a clean session")
             self.session.rollback()
         connection = self.session.connection()
         try:
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            begin_write_transaction(connection)
         except OperationalError as error:
             self.session.rollback()
             if self._is_sqlite_retry_conflict(error):
@@ -739,6 +746,94 @@ class TaskService:
         self.session.commit()
         return self._view(self._load_task(task.id))
 
+    def _source_fingerprint(
+        self, source: tuple[str, str, str | None], options: dict[str, Any]
+    ) -> str:
+        kind, locator, _ = source
+        snapshot = self._pipeline_snapshot(
+            options,
+            "00000000-0000-4000-8000-000000000000",
+        )
+        notes = snapshot.get("notes")
+        if isinstance(notes, dict):
+            notes.pop("custom_prompt_envelope", None)
+            if notes.get("template") == "custom":
+                prompt = options.get("notes_custom_prompt")
+                if prompt is None:
+                    prompt = self.configuration.resolve_default_custom_prompt()
+                if not isinstance(prompt, str):
+                    raise InvalidTaskOperation("custom notes prompt is unavailable")
+                notes["custom_prompt_sha256"] = hashlib.sha256(
+                    prompt.strip().encode("utf-8")
+                ).hexdigest()
+        if kind in {"local_media", "local_subtitle"}:
+            path = Path(locator)
+            stat = path.stat()
+            source_identity: object = [str(path.resolve()), stat.st_size, stat.st_mtime_ns]
+        else:
+            source_identity = [kind, locator]
+        payload = json.dumps(
+            {"source": source_identity, "pipeline": snapshot},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _find_reusable_task(self, fingerprint: str) -> TaskRecord | None:
+        if self.source_result_cache is not None:
+            cached_id = self.source_result_cache.get(fingerprint)
+            if cached_id:
+                cached_task = self.session.get(TaskRecord, cached_id)
+                if cached_task is not None and cached_task.status not in {"failed", "canceled"}:
+                    return self._load_task(cached_task.id)
+                self.source_result_cache.delete(fingerprint)
+        mapping = self.session.get(SourceResultRecord, fingerprint)
+        if mapping is None:
+            return None
+        try:
+            task = self._load_task(mapping.task_id)
+        except KeyError:
+            self.session.delete(mapping)
+            self.session.commit()
+            return None
+        if task.status in {"failed", "canceled"}:
+            self.session.delete(mapping)
+            self.session.commit()
+            if self.source_result_cache is not None:
+                self.source_result_cache.delete(fingerprint)
+            return None
+        if self.source_result_cache is not None:
+            self.source_result_cache.set(fingerprint, task.id)
+        return task
+
+    def _create_reusable_task(
+        self,
+        *,
+        source: tuple[str, str, str | None],
+        selected_options: dict[str, Any],
+    ) -> TaskView:
+        fingerprint = self._source_fingerprint(source, selected_options)
+        existing = self._find_reusable_task(fingerprint)
+        if existing is not None:
+            return self._view(existing)
+        task = self._build_validated_task(
+            validated=[source],
+            selected_options=selected_options,
+        )
+        self.session.add(SourceResultRecord(fingerprint=fingerprint, task_id=task.id))
+        try:
+            self.session.commit()
+        except IntegrityError:
+            self.session.rollback()
+            existing = self._find_reusable_task(fingerprint)
+            if existing is None:
+                raise
+            return self._view(existing)
+        if self.source_result_cache is not None:
+            self.source_result_cache.set(fingerprint, task.id)
+        return self._view(self._load_task(task.id))
+
     def create_task(
         self, *, sources: list[dict[str, str]], options: dict[str, Any] | None = None
     ) -> TaskView:
@@ -748,6 +843,11 @@ class TaskService:
         if set(selected_options) - _TASK_OPTION_KEYS:
             raise InvalidTaskOperation("unsupported task option")
         validated = [(*self._validate_source(source), None) for source in sources]
+        if len(validated) == 1 and self.source_result_cache is not None:
+            return self._create_reusable_task(
+                source=validated[0],
+                selected_options=selected_options,
+            )
         return self._create_validated_task(
             validated=validated, selected_options=selected_options
         )
@@ -771,18 +871,48 @@ class TaskService:
         locators = [item[1] for item in validated]
         if len(locators) != len(set(locators)):
             raise InvalidTaskOperation("batch sources must be unique")
+        if self.source_result_cache is None:
+            try:
+                task_ids = [
+                    self._build_validated_task(
+                        validated=[source],
+                        selected_options=selected_options,
+                    ).id
+                    for source in validated
+                ]
+                self.session.commit()
+            except Exception:
+                self.session.rollback()
+                raise
+            return tuple(self._view(self._load_task(task_id)) for task_id in task_ids)
+        fingerprints = [
+            self._source_fingerprint(source, selected_options) for source in validated
+        ]
+        reusable = [self._find_reusable_task(value) for value in fingerprints]
+        task_ids: list[str] = []
+        created_fingerprints: list[tuple[str, str]] = []
         try:
-            task_ids = [
-                self._build_validated_task(
-                    validated=[source],
-                    selected_options=selected_options,
-                ).id
-                for source in validated
-            ]
+            for source, fingerprint, existing in zip(
+                validated, fingerprints, reusable, strict=True
+            ):
+                if existing is not None:
+                    task_ids.append(existing.id)
+                    continue
+                task = self._build_validated_task(
+                    validated=[source], selected_options=selected_options
+                )
+                self.session.add(
+                    SourceResultRecord(fingerprint=fingerprint, task_id=task.id)
+                )
+                task_ids.append(task.id)
+                created_fingerprints.append((fingerprint, task.id))
             self.session.commit()
         except Exception:
             self.session.rollback()
             raise
+        if self.source_result_cache is not None:
+            for fingerprint, task_id in created_fingerprints:
+                self.source_result_cache.set(fingerprint, task_id)
         return tuple(self._view(self._load_task(task_id)) for task_id in task_ids)
 
     def create_upload_task(
